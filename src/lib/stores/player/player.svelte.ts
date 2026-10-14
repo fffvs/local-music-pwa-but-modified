@@ -1,3 +1,4 @@
+
 import { AudioGraph } from '$lib/audio/audio-graph.svelte.ts'
 import { PlaybackController, type TrackLoader } from '$lib/audio/playback-controller.svelte.ts'
 import { onDatabaseChange } from '$lib/db/events.ts'
@@ -41,11 +42,71 @@ export const PLAYER_PLAYBACK_RATE_MIN = 0.5
 export const PLAYER_PLAYBACK_RATE_MAX = 2
 
 export class PlayerStore {
+        get audioContext() {
+                return this.#graph.initialized ? this.#graph.context : null
+        }
+
 	readonly #graph = new AudioGraph()
 	readonly #queue = new QueueStore()
 	/** Narrowed to `QueueView`, which cannot start audio. */
 	readonly queue: QueueView = this.#queue
-	readonly #history = new PlayHistoryTracker()
+	        readonly #history = new PlayHistoryTracker()
+        
+        // Sleep Timer States
+                // Expose transient seek ramp helper to PlaybackController
+        async runSeekRamp(action: () => void): Promise<void> {
+                await this.#graph.runTransientSeekRamp(action);
+        }
+
+        sleepTimerTimeLeft = $state<number | null>(null)
+        dynamicFaviconEnabled = $state(false)
+        autoPauseOnUnplug = $state(true)
+        resumeOnStartup = $state(true)
+        ambientBackgroundEnabled = $state(true)
+        
+        // Standard, clean Svelte 5 reactive state fields
+        bitPerfectEnabled = $state(true)
+        nightModeEnabled = $state(false)
+        stereoPan = $state(0.0)
+        fadeEnabled = $state(true)
+        reverbPreset = $state<'off' | 'studio' | 'room' | 'hall' | 'cathedral'>('off')
+        #sleepTimerInterval: any = null
+
+        get sleepTimer() {
+                return this.sleepTimerTimeLeft !== null ? Math.ceil(this.sleepTimerTimeLeft / 60).toString() : 'off'
+        }
+
+        set sleepTimer(value: string) {
+                if (value === 'off') {
+                        this.setSleepTimer(null)
+                } else {
+                        this.setSleepTimer(Number.parseInt(value, 10))
+                }
+        }
+
+        setSleepTimer(minutes: number | null) {
+                if (this.#sleepTimerInterval !== null) {
+                        clearInterval(this.#sleepTimerInterval)
+                        this.#sleepTimerInterval = null
+                }
+
+                if (minutes === null) {
+                        this.sleepTimerTimeLeft = null
+                        return
+                }
+
+                this.sleepTimerTimeLeft = minutes * 60
+                this.#sleepTimerInterval = setInterval(() => {
+                        if (this.sleepTimerTimeLeft !== null) {
+                                this.sleepTimerTimeLeft--
+                                if (this.sleepTimerTimeLeft <= 0) {
+                                        this.pause()
+                                        this.setSleepTimer(null)
+                                }
+                        }
+                }, 1000)
+        }
+
 	readonly #ms = new MediaSessionController(this)
 	readonly equalizer = new EqualizerStore(this.#graph)
 
@@ -155,6 +216,41 @@ export class PlayerStore {
 	}
 
 	constructor() {
+
+                // Throttled 5s state-saver for "Continue Where You Left Off" QoL
+                let lastSaveTime = 0;
+                $effect(() => {
+                        const time = this.currentTime;
+                        const id = this.activeTrack?.id;
+                        const now = Date.now();
+                        if (id && this.playing && now - lastSaveTime > 5000) {
+                                localStorage.setItem('snaeplayer-resume-trackId', id.toString());
+                                localStorage.setItem('snaeplayer-resume-time', time.toString());
+                                lastSaveTime = now;
+                        }
+                });
+        
+
+                // Auto-Pause on Headphone Unplug (monitors system audio output changes)
+                if (typeof navigator !== 'undefined' && navigator.mediaDevices) {
+                        let lastOutputsCount = 0;
+                        navigator.mediaDevices.enumerateDevices().then(devices => {
+                                lastOutputsCount = devices.filter(d => d.kind === 'audiooutput').length;
+                        }).catch(() => {});
+
+                        navigator.mediaDevices.addEventListener('devicechange', async () => {
+                                if (!this.autoPauseOnUnplug || !this.playing) return;
+                                try {
+                                        const devices = await navigator.mediaDevices.enumerateDevices();
+                                        const currentOutputs = devices.filter(d => d.kind === 'audiooutput').length;
+                                        if (currentOutputs < lastOutputsCount) {
+                                                this.pause(); // Headphone unplugged -> Pause!
+                                        }
+                                        lastOutputsCount = currentOutputs;
+                                } catch (e) {}
+                        });
+                }
+        
 		persist('player', this, [
 			'volume',
 			'repeat',
@@ -170,7 +266,8 @@ export class PlayerStore {
 		this.#setupQueueDatabaseListener()
 
 		this.#setupPreloadEffect()
-		this.#setupVolumeEffect()
+		this.#setupDspEffect()
+                this.#setupVolumeEffect()
 		this.#setupPlaybackRateEffect()
 		this.#setupPlayHistoryUpdateEffect()
 	}
@@ -421,4 +518,27 @@ export class PlayerStore {
 		this.#controller.abort()
 		this.#graph.dispose()
 	}
+
+        #setupDspEffect(): void {
+                $effect(() => {
+                        if (!this.#graph.initialized) {
+                                return
+                        }
+
+                        // Svelte 5 automatically tracks reads of these state fields as dependencies!
+                        const pan = this.stereoPan
+                        const nightMode = this.nightModeEnabled
+                        const bitPerfect = this.bitPerfectEnabled
+
+                        // Push updates synchronously into AudioGraph's physical Web Audio nodes
+                        this.#graph.bitPerfectEnabled = bitPerfect
+                        this.#graph.nightModeEnabled = nightMode
+                        this.#graph.stereoPan = pan
+                        this.#graph.reverbPreset = this.reverbPreset
+                        this.#graph.updateReverb()
+
+                        this.#graph.updateCompressor()
+                        this.#graph.updatePanner()
+                })
+        }
 }

@@ -1,23 +1,32 @@
 import { EQ_BANDS } from './eq-bands.ts'
+import invariant from 'tiny-invariant'
 
 /**
- * Owns the AudioContext and the EQ filter chain.
- * Multiple engines connect their GainNodes to `inputNode`.
- *
- *   engineA.gainNode ─┐
- *                      ├─→ inputNode → filter[0] → … → filter[9] → destination
- *   engineB.gainNode ─┘
+ * Owns the AudioContext, EQ filter chain, volume, compressor, stereo panner, and cached procedural reverb.
  */
 export class AudioGraph {
 	#context: AudioContext | null = $state(null)
 	#inputNode: GainNode | null = null
 	#volumeNode: GainNode | null = null
+	#fadeNode: GainNode | null = null
+	#compressorNode: DynamicsCompressorNode | null = null
+	#pannerNode: StereoPannerNode | null = null
+	#convolverNode: ConvolverNode | null = null
+	#dryGainNode: GainNode | null = null
+	#wetGainNode: GainNode | null = null
 	#filters: BiquadFilterNode[] = []
+	#suspendTimeout: number | null = null
+	#nativeSampleRate: number | null = null
 
-	/**
-	 * Lazily creates the AudioContext on first access.
-	 * Must be called from a user-gesture handler on first use.
-	 */
+	// Cache synthesized impulse responses to avoid 2M+ loop recalculations
+	#reverbCache = new Map<string, AudioBuffer>()
+
+	fadeEnabled = $state(true)
+	nightModeEnabled = $state(false)
+	stereoPan = $state(0.0)
+	bitPerfectEnabled = $state(true)
+	reverbPreset = $state<'off' | 'studio' | 'room' | 'hall' | 'cathedral'>('off')
+
 	get context(): AudioContext {
 		return this.#ensureGraph()
 	}
@@ -29,17 +38,16 @@ export class AudioGraph {
 	get inputNode(): GainNode {
 		this.#ensureGraph()
 		invariant(this.#inputNode, 'AudioGraph input node should be initialized')
-
 		return this.#inputNode
 	}
 
-	/**
-	 * The EQ filter nodes, exposed for EqualizerStore to control gain.
-	 * Indices correspond 1:1 with EQ_BANDS.
-	 */
 	get filters(): readonly BiquadFilterNode[] {
 		this.#ensureGraph()
 		return this.#filters
+	}
+
+	setNextNativeSampleRate(rate: number) {
+		this.#nativeSampleRate = rate
 	}
 
 	#ensureGraph(): AudioContext {
@@ -47,7 +55,13 @@ export class AudioGraph {
 			return this.#context
 		}
 
-		const ctx = new AudioContext()
+		const options: AudioContextOptions = {}
+		if (this.bitPerfectEnabled && this.#nativeSampleRate) {
+			options.sampleRate = this.#nativeSampleRate
+			console.log(`[Bit-Perfect] Initializing AudioContext at: ${this.#nativeSampleRate}Hz`)
+		}
+
+		const ctx = new AudioContext(options)
 
 		const filters = EQ_BANDS.map(({ frequency }) => {
 			const filter = ctx.createBiquadFilter()
@@ -58,8 +72,6 @@ export class AudioGraph {
 			return filter
 		})
 
-		// A GainNode as the mixer/entry point keeps inputNode
-		// semantically distinct from the first EQ filter.
 		const inputNode = ctx.createGain()
 
 		let node: AudioNode = inputNode
@@ -67,16 +79,140 @@ export class AudioGraph {
 			node.connect(filter)
 			node = filter
 		}
+
+		const compressorNode = ctx.createDynamicsCompressor()
+		compressorNode.threshold.value = 0
+		compressorNode.ratio.value = 1
+		node.connect(compressorNode)
+
+		const pannerNode = ctx.createStereoPanner()
+		pannerNode.pan.value = 0
+		compressorNode.connect(pannerNode)
+
+		// Parallel Reverb Circuit
+		const dryGainNode = ctx.createGain()
+		const wetGainNode = ctx.createGain()
+		const convolverNode = ctx.createConvolver()
+
+		dryGainNode.gain.value = 1.0
+		wetGainNode.gain.value = 0.0
+
+		pannerNode.connect(dryGainNode)
+		pannerNode.connect(convolverNode)
+		convolverNode.connect(wetGainNode)
+
+		const fadeNode = ctx.createGain()
+		fadeNode.gain.value = 1.0
+		dryGainNode.connect(fadeNode)
+		wetGainNode.connect(fadeNode)
+
 		const volumeNode = ctx.createGain()
-		node.connect(volumeNode)
+		fadeNode.connect(volumeNode)
 		volumeNode.connect(ctx.destination)
 
 		this.#context = ctx
 		this.#inputNode = inputNode
 		this.#volumeNode = volumeNode
+		this.#fadeNode = fadeNode
+		this.#compressorNode = compressorNode
+		this.#pannerNode = pannerNode
+		this.#convolverNode = convolverNode
+		this.#dryGainNode = dryGainNode
+		this.#wetGainNode = wetGainNode
 		this.#filters = filters
 
+		this.updateCompressor()
+		this.updatePanner()
+		this.updateReverb()
+
 		return ctx
+	}
+
+	async runTransientSeekRamp(seekAction: () => void): Promise<void> {
+		if (!this.#context || !this.#fadeNode) {
+			seekAction()
+			return
+		}
+
+		const ctx = this.#context
+		const t = ctx.currentTime
+
+		this.#fadeNode.gain.cancelScheduledValues(t)
+		this.#fadeNode.gain.setValueAtTime(this.#fadeNode.gain.value, t)
+		this.#fadeNode.gain.setTargetAtTime(0.001, t, 0.004)
+
+		seekAction()
+
+		const t2 = ctx.currentTime
+		this.#fadeNode.gain.cancelScheduledValues(t2)
+		this.#fadeNode.gain.setValueAtTime(0.001, t2)
+		this.#fadeNode.gain.setTargetAtTime(1.0, t2, 0.008)
+	}
+
+	updateCompressor(): void {
+		if (!this.#compressorNode || !this.#context) return
+		const t = this.#context.currentTime
+		if (this.nightModeEnabled) {
+			this.#compressorNode.threshold.setTargetAtTime(-24, t, 0.03)
+			this.#compressorNode.knee.setTargetAtTime(30, t, 0.03)
+			this.#compressorNode.ratio.setTargetAtTime(12, t, 0.03)
+			this.#compressorNode.attack.setTargetAtTime(0.003, t, 0.03)
+			this.#compressorNode.release.setTargetAtTime(0.25, t, 0.03)
+		} else {
+			this.#compressorNode.threshold.setTargetAtTime(0, t, 0.03)
+			this.#compressorNode.ratio.setTargetAtTime(1, t, 0.03)
+		}
+	}
+
+	#generateImpulseResponse(duration: number, decay: number): AudioBuffer {
+		const ctx = this.context
+		const cacheKey = `${ctx.sampleRate}_${duration}_${decay}`
+		const cached = this.#reverbCache.get(cacheKey)
+		if (cached) return cached
+
+		const sampleRate = ctx.sampleRate
+		const length = Math.floor(sampleRate * duration)
+		const impulse = ctx.createBuffer(2, length, sampleRate)
+		const left = impulse.getChannelData(0)
+		const right = impulse.getChannelData(1)
+
+		for (let i = 0; i < length; i++) {
+			const envelope = Math.pow(1 - i / length, decay)
+			left[i] = (Math.random() * 2 - 1) * envelope
+			right[i] = (Math.random() * 2 - 1) * envelope
+		}
+
+		this.#reverbCache.set(cacheKey, impulse)
+		return impulse
+	}
+
+	updateReverb(): void {
+		if (!this.#context || !this.#dryGainNode || !this.#wetGainNode || !this.#convolverNode) return
+		const t = this.#context.currentTime
+
+		const preset = this.reverbPreset
+		if (preset === 'off') {
+			this.#dryGainNode.gain.setTargetAtTime(1.0, t, 0.03)
+			this.#wetGainNode.gain.setTargetAtTime(0.0, t, 0.03)
+			return
+		}
+
+		const configs = {
+			studio: { duration: 0.8, decay: 3.5, wet: 0.18, dry: 0.95 },
+			room: { duration: 1.6, decay: 2.5, wet: 0.30, dry: 0.88 },
+			hall: { duration: 3.2, decay: 1.8, wet: 0.42, dry: 0.80 },
+			cathedral: { duration: 5.5, decay: 1.2, wet: 0.55, dry: 0.70 },
+		}
+
+		const cfg = configs[preset] || configs.room
+		this.#convolverNode.buffer = this.#generateImpulseResponse(cfg.duration, cfg.decay)
+		this.#dryGainNode.gain.setTargetAtTime(cfg.dry, t, 0.03)
+		this.#wetGainNode.gain.setTargetAtTime(cfg.wet, t, 0.03)
+	}
+
+	updatePanner(): void {
+		if (!this.#pannerNode || !this.#context) return
+		this.#pannerNode.pan.setTargetAtTime(this.stereoPan, this.#context.currentTime, 0.015)
 	}
 
 	setVolume(normalized: number): void {
@@ -86,6 +222,18 @@ export class AudioGraph {
 	}
 
 	resume(): Promise<void> {
+		if (this.#suspendTimeout !== null) {
+			clearTimeout(this.#suspendTimeout)
+			this.#suspendTimeout = null
+		}
+
+		if (this.#context && this.#fadeNode) {
+			this.#fadeNode.gain.cancelScheduledValues(this.#context.currentTime)
+			const targetGain = 1.0
+			const timeConstant = this.fadeEnabled ? 0.04 : 0.001
+			this.#fadeNode.gain.setTargetAtTime(targetGain, this.#context.currentTime, timeConstant)
+		}
+
 		if (this.#context?.state !== 'suspended') {
 			return Promise.resolve()
 		}
@@ -93,21 +241,86 @@ export class AudioGraph {
 		return this.#context.resume()
 	}
 
-	suspend(): Promise<void> {
-		if (this.#context?.state !== 'running') {
+	suspend(forceImmediate: boolean = false): Promise<void> {
+		if (this.#suspendTimeout !== null) {
+			clearTimeout(this.#suspendTimeout)
+			this.#suspendTimeout = null
+		}
+
+		if (!this.#context || this.#context.state !== 'running') {
 			return Promise.resolve()
 		}
 
-		return this.#context.suspend()
+		if (this.#fadeNode) {
+			this.#fadeNode.gain.cancelScheduledValues(this.#context.currentTime)
+			const targetGain = 0.0
+			const timeConstant = this.fadeEnabled ? 0.035 : 0.001
+			this.#fadeNode.gain.setTargetAtTime(targetGain, this.#context.currentTime, timeConstant)
+		}
+
+		if (forceImmediate) {
+			return this.#context.suspend()
+		}
+
+		return new Promise((resolve) => {
+			this.#suspendTimeout = window.setTimeout(() => {
+				this.#suspendTimeout = null
+				if (this.#context && this.#context.state === 'running') {
+					this.#context.suspend().then(resolve)
+				} else {
+					resolve()
+				}
+			}, 30000)
+		})
 	}
 
 	dispose(): void {
+		if (this.#suspendTimeout !== null) {
+			clearTimeout(this.#suspendTimeout)
+			this.#suspendTimeout = null
+		}
+
+		this.#reverbCache.clear()
+
+		if (this.#inputNode) {
+			try { this.#inputNode.disconnect() } catch {}
+		}
+		if (this.#filters) {
+			for (const filter of this.#filters) {
+				try { filter.disconnect() } catch {}
+			}
+		}
+		if (this.#compressorNode) {
+			try { this.#compressorNode.disconnect() } catch {}
+		}
+		if (this.#pannerNode) {
+			try { this.#pannerNode.disconnect() } catch {}
+		}
+		if (this.#convolverNode) {
+			try { this.#convolverNode.disconnect() } catch {}
+		}
+		if (this.#dryGainNode) {
+			try { this.#dryGainNode.disconnect() } catch {}
+		}
+		if (this.#wetGainNode) {
+			try { this.#wetGainNode.disconnect() } catch {}
+		}
+		if (this.#fadeNode) {
+			try { this.#fadeNode.disconnect() } catch {}
+		}
+		if (this.#volumeNode) {
+			try { this.#volumeNode.disconnect() } catch {}
+		}
+
 		if (this.#context) {
 			this.#context.close()
 		}
 		this.#context = null
 		this.#inputNode = null
 		this.#volumeNode = null
+		this.#fadeNode = null
+		this.#compressorNode = null
+		this.#pannerNode = null
 		this.#filters = []
 	}
 }

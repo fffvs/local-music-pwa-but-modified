@@ -78,7 +78,6 @@ interface AudioPlayerOptions {
 
 interface TryLoadEngineOptions {
 	signal: AbortSignal
-	// Using getter so that we can get latest value, only when we actually start loading the audio
 	scheduleAt?: () => number
 	mustBeGapless?: boolean
 	reason: TrackLoadReason
@@ -123,10 +122,6 @@ export class PlaybackController {
 		this.#options = options
 	}
 
-	/**
-	 * Load and play a track into the current slot.
-	 * Idempotent: calling with the same trackId while already loading or ready will play same track without reloading.
-	 */
 	async play(trackId: number, options: SwitchAndPlayOptions = {}): Promise<void> {
 		this.playing = true
 		const current = this.#current
@@ -136,7 +131,6 @@ export class PlaybackController {
 			}
 
 			void current.engine.play()
-
 			return
 		}
 
@@ -144,6 +138,7 @@ export class PlaybackController {
 			return
 		}
 
+		// Synchronously teardown current engine to immediately drop old audio RAM
 		this.#teardownCurrent()
 
 		const next = this.#next
@@ -177,11 +172,6 @@ export class PlaybackController {
 		this.#promoteToCurrent(transition.ready(result.engine))
 	}
 
-	/**
-	 * Preload track for gapless pre-buffering. Idempotent: same track already
-	 * in a non-idle state → no-op. Marks unavailable immediately if gapless is not
-	 * possible, avoiding an unnecessary file load.
-	 */
 	async preloadNext(trackId: number): Promise<void> {
 		const next = this.#next
 		if (next.status !== 'idle' && next.trackId === trackId) {
@@ -191,8 +181,6 @@ export class PlaybackController {
 		this.#teardownAndIdleNext()
 		const current = this.#current
 
-		// Never pre-schedule the currently-playing track as the gapless "next".
-		// play() will reuse existing engine if same track is requested
 		if (current.status === 'ready' && current.trackId === trackId) {
 			return
 		}
@@ -241,7 +229,6 @@ export class PlaybackController {
 	}
 
 	seek(time: number): void {
-		// Optimistically update currentTime so UI has no tear
 		this.currentTime = time
 		this.#teardownAndIdleNext()
 		if (this.#current.status === 'ready') {
@@ -312,7 +299,6 @@ export class PlaybackController {
 			}
 
 			console.error('[engine error]:', error)
-
 			return { status: 'failed', reason: 'error' }
 		}
 	}

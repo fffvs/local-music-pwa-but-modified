@@ -21,9 +21,8 @@ import {
 
 const FORMATS = [FLAC]
 const LOOK_AHEAD_TIME_SECONDS = 2.0
-const BUFFER_RESUME_SECONDS = 1.5
-// Seeks this close to the end count as "at the end", absorbing the metadata-vs-
-// decoded duration mismatch so no residual sliver plays.
+// Ultra-fast start: only require 0.2s of decoded buffer to begin playback
+const BUFFER_RESUME_SECONDS = 0.2
 const SEEK_END_THRESHOLD_SECONDS = 0.5
 
 const isAudioCodecSupported = browser && 'AudioDecoder' in globalThis
@@ -42,7 +41,6 @@ export const supportsBufferEngine = (codec: string): boolean | Promise<boolean> 
 		return false
 	}
 
-	// As of Safari 26.5, it fails to decode FLAC files with error "InternalAudioDecoderCocoa decoding"
 	if (isSafari()) {
 		return false
 	}
@@ -63,34 +61,27 @@ interface AudioBufferEngineOptions {
 
 /**
  * Plays audio by streaming and decoding via Mediabunny, scheduling decoded
- * AudioBuffers directly on the Web Audio API timeline.
+ * AudioBuffers directly on the Web Audio API timeline with minimal memory overhead.
  */
 export class AudioBufferEngine implements AudioEngineImpl {
 	readonly #graph: AudioGraph
 	readonly #gainNode: GainNode
 
-	#input: Input
-	#audioTrack: InputAudioTrack
+	#input: Input | null
+	#audioTrack: InputAudioTrack | null
 
 	#scheduledSources = new Set<AudioBufferSourceNode>()
-
 	#scheduleBase = 0
-
-	// File time we started from (non-zero after seek).
 	#seekOffset = 0
 
 	#schedulingController: AbortController
 	readonly #externalSignal: AbortSignal
-	/** Combined internal and external abort signals */
 	#signal: AbortSignal
 
 	#playbackRate = 1
-
 	#timerId: number | null = null
 
-	// AudioContext time at which the last scheduled buffer ends.
 	#lastScheduledEndTime = 0
-	// Whether the user intends to play (not paused by user action).
 	#wantsToPlay = false
 
 	currentTime = $state(0)
@@ -123,7 +114,7 @@ export class AudioBufferEngine implements AudioEngineImpl {
 		this.#gainNode.connect(audioGraph.inputNode)
 		this.#schedulingController = new AbortController()
 
-		this.#externalSignal.addEventListener('abort', () => this.#dispose())
+		this.#externalSignal.addEventListener('abort', () => this.#dispose(), { once: true })
 		this.#signal = AbortSignal.any([this.#schedulingController.signal, this.#externalSignal])
 
 		this.#startFrom(0, options.scheduleAt)
@@ -133,8 +124,6 @@ export class AudioBufferEngine implements AudioEngineImpl {
 		this.currentTime = time
 		this.#resetScheduling()
 
-		// Seek to the end while paused: mark ended so the next play() restarts
-		// from the start (like the HTML element).
 		if (!this.#wantsToPlay && time >= this.duration - SEEK_END_THRESHOLD_SECONDS) {
 			this.#ended = true
 			return
@@ -164,38 +153,39 @@ export class AudioBufferEngine implements AudioEngineImpl {
 	pause(): void {
 		this.#wantsToPlay = false
 		this.#stopCurrentTimeLoop()
-		void this.#graph.suspend()
+		void this.#graph.suspend(false)
 	}
 
 	#dispose(): void {
 		this.#resetScheduling()
-		this.#input.dispose()
-		this.#gainNode.disconnect()
+		if (this.#input) {
+			try {
+				this.#input.dispose()
+			} catch {}
+			this.#input = null
+		}
+		this.#audioTrack = null
+		try {
+			this.#gainNode.disconnect()
+		} catch {}
 	}
 
 	#startFrom(seekTo: number, scheduleAt?: number) {
 		const signal = this.#signal
-
-		// (Re)start clears the ended state.
 		this.#ended = false
 
-		// Recreating sink on every schedule, so rapid seek/rate-change
-		// calls don't corrupt Mediabunny's internal state
+		if (!this.#audioTrack) return
 		const sink = new AudioBufferSink(this.#audioTrack)
 
 		const ctx = this.#graph.context
-		const base = scheduleAt ?? ctx.currentTime
+		const base = scheduleAt ?? Math.max(ctx.currentTime, this.#lastScheduledEndTime)
 		this.#scheduleBase = base
 		this.#seekOffset = seekTo
 		this.#lastScheduledEndTime = base
 
-		// Suspend the graph for non-gapless starts so we don't play silence
-		// while waiting for the first decoded buffers to be scheduled.
 		if (scheduleAt === undefined) {
 			this.buffering = true
-			void this.#graph.suspend()
 		} else if (this.#wantsToPlay) {
-			// Gapless pre-load: start time loop only if the user is already playing.
 			this.#startCurrentTimeLoop(signal)
 		}
 
@@ -236,19 +226,17 @@ export class AudioBufferEngine implements AudioEngineImpl {
 				const ctx = this.#graph.context
 				const startAt = base + (timestamp - seekTo) / this.#playbackRate
 
-				// Prevent memory bloat and decode only a few seconds ahead of the current play time.
+				// Strict look-ahead throttle to prevent decoding gigabytes into RAM
 				while (startAt > ctx.currentTime + LOOK_AHEAD_TIME_SECONDS) {
 					if (signal.aborted) {
 						break
 					}
 
-					// If we are within the final LOOK_AHEAD_TIME_SECONDS window of the track,
-					// stop throttling and just let the last few buffers schedule.
 					if (trackDuration - timestamp <= LOOK_AHEAD_TIME_SECONDS) {
 						break
 					}
 
-					await wait(100, signal)
+					await wait(50, signal)
 				}
 
 				if (signal.aborted) {
@@ -273,32 +261,29 @@ export class AudioBufferEngine implements AudioEngineImpl {
 				this.#scheduledSources.add(source)
 
 				source.addEventListener('ended', () => {
-					// Remove it so it can be garbage collected
 					this.#scheduledSources.delete(source)
-
+					try {
+						source.disconnect()
+					} catch {}
 					handleEnded()
-				})
+				}, { once: true })
 			}
 
 			allBuffersPulled = true
 
-			// Short track: decode finished before reaching BUFFER_RESUME_SECONDS.
 			if (this.buffering && !signal.aborted) {
 				resumeAfterBuffering()
 			}
 		} catch (error) {
 			if (signal.aborted || error instanceof InputDisposedError || isAbortError(error)) {
-				// Do nothing
+				// Aborted cleanly
 			} else {
 				console.error('Error during audio playback:', error)
 				this.onError?.()
 			}
-
 			return
 		}
 
-		// Guard against when loop completed but NO buffers were ever scheduled
-		// (e.g., an empty file or a seek completely past the end of the track).
 		handleEnded()
 	}
 
@@ -325,10 +310,6 @@ export class AudioBufferEngine implements AudioEngineImpl {
 		}
 	}
 
-	/**
-	 * Stop and disconnect all scheduled sources,
-	 * aborting any in-progress load or playback
-	 */
 	#resetScheduling() {
 		this.#stopCurrentTimeLoop()
 		this.buffering = false
@@ -338,14 +319,10 @@ export class AudioBufferEngine implements AudioEngineImpl {
 		for (const node of this.#scheduledSources) {
 			try {
 				node.stop()
-			} catch {
-				// Already stopped.
-			}
+			} catch {}
 			try {
 				node.disconnect()
-			} catch {
-				// Already disconnected.
-			}
+			} catch {}
 		}
 		this.#scheduledSources.clear()
 
@@ -361,6 +338,7 @@ export const createAudioBufferEngine = async (options: AudioEngineOptions) => {
 
 	const audioTrack = await input.getPrimaryAudioTrack()
 	if (!audioTrack) {
+		input.dispose()
 		throw new Error('No audio track found')
 	}
 

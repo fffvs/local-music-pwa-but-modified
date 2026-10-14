@@ -86,6 +86,24 @@
 	const isDatabasePending = $derived(isDatabasePendingGetter.current)
 
 	const isGaplessPlaybackSupported = browser && 'AudioDecoder' in globalThis
+
+	        const reverbOptions = [
+                { name: 'Off (Direct Sound)', value: 'off' },
+                { name: 'Subtle Studio', value: 'studio' },
+                { name: 'Living Room', value: 'room' },
+                { name: 'Concert Hall', value: 'hall' },
+                { name: 'Cathedral / Space', value: 'cathedral' },
+        ]
+
+        const sleepTimerOptions = [
+                { name: 'Off', value: 'off' },
+                { name: '5 Minutes', value: '5' },
+                { name: '15 Minutes', value: '15' },
+                { name: '30 Minutes', value: '30' },
+                { name: '45 Minutes', value: '45' },
+                { name: '60 Minutes', value: '60' },
+                { name: '90 Minutes', value: '90' },
+        ]
 </script>
 
 {#snippet heading(text: string)}
@@ -263,6 +281,83 @@
 			description={m.settingsPauseAfterEachTrackDescription()}
 			bind:checked={player.pauseAfterTrackWhenRepeatIsOff}
 		/>
+
+		<SettingsSelectListItem
+				title="Sleep Timer"
+				description={player.sleepTimerTimeLeft !== null ? `Pauses playback in ${Math.floor(player.sleepTimerTimeLeft / 60)}m ${player.sleepTimerTimeLeft % 60}s` : "Automatically pauses music after selected time"}
+				bind:selected={player.sleepTimer}
+				items={sleepTimerOptions}
+				bottomDivider
+			/>
+
+			<SettingsSwitchListItem
+				title="Fade Play & Pause"
+				description="Smoothly transition volume over 150ms when starting or pausing tracks"
+				bind:checked={player.fadeEnabled}
+			/>
+
+                <SettingsSwitchListItem
+                        title="Dynamic Tab Metadata"
+                        description="Shows current song info in the browser tab title and replaces favicon with album art"
+                        bind:checked={player.dynamicFaviconEnabled}
+                        bottomDivider
+                />
+
+                <SettingsSwitchListItem
+                        title="Auto-Pause on Unplug"
+                        description="Automatically pauses music playback when headphones are unplugged or disconnected"
+                        bind:checked={player.autoPauseOnUnplug}
+                />
+
+                <SettingsSwitchListItem
+                        title="Bit-Perfect Playback"
+                        description="Initializes audio engine at the track's native sample rate (e.g. 96kHz FLAC) to bypass browser re-sampling"
+                        bind:checked={player.bitPerfectEnabled}
+                        bottomDivider
+                />
+
+                <SettingsSelectListItem
+                        title="Acoustic Space (Reverb)"
+                        description="Simulates natural acoustics, reflections, and room resonance on headphones and speakers"
+                        bind:selected={player.reverbPreset}
+                        items={reverbOptions}
+                        bottomDivider
+                />
+
+                <SettingsSwitchListItem
+                        title="Night Mode (Dynamics Compressor)"
+                        description="Smoothly compresses volume range: normalizes spikes while keeping quiet voices easy to hear"
+                        bind:checked={player.nightModeEnabled}
+                        bottomDivider
+                />
+
+                <SettingsListItem title="Stereo Balance" columnInCompactLayout>
+                        {#snippet afterTitle()}
+                                <Slider
+                                        min={-1.0}
+                                        max={1.0}
+                                        step={0.1}
+                                        bind:value={player.stereoPan}
+                                        format={(val) => {
+                                                if (val === 0) return 'Center';
+                                                return val < 0 ? `L ${Math.abs(val * 100).toFixed(0)}%` : `R ${(val * 100).toFixed(0)}%`;
+                                        }}
+                                />
+                        {/snippet}
+                </SettingsListItem>
+
+                <SettingsSwitchListItem
+                        title="Resume On Startup"
+                        description="Automatically prompts you to continue playing where you left off when starting the app"
+                        bind:checked={player.resumeOnStartup}
+                        bottomDivider
+                />
+
+                <SettingsSwitchListItem
+                        title="Ambient Player Backdrop"
+                        description="Renders a beautiful, hardware-accelerated blurred glow of album art behind the player panel"
+                        bind:checked={player.ambientBackgroundEnabled}
+                />
 	</section>
 
 	<section class="card settings-max-width mx-auto mt-6 w-full text-body-lg">

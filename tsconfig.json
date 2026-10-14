@@ -1,15 +1,26 @@
 {
-	"extends": "./.generated/svelte-kit/tsconfig.json",
-	"compilerOptions": {
-		"types": [
-			"@types/wicg-file-system-access",
-			"./.generated/types/auto-imports.d.ts",
-			"./.generated/i18n/messages.d.ts"
-		]
-	},
-	"references": [
-		{
-			"path": "./tsconfig.node.json"
-		}
-	]
+  "extends": "./.generated/svelte-kit/tsconfig.json",
+  "compilerOptions": {
+    "types": [
+      "@types/wicg-file-system-access",
+      "./.generated/types/auto-imports.d.ts",
+      "./.generated/i18n/messages.d.ts"
+    ],
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "noImplicitReturns": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "forceConsistentCasingInFileNames": true,
+    "strictFunctionTypes": true,
+    "noImplicitThis": true,
+    "alwaysStrict": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "references": [
+    {
+      "path": "./tsconfig.node.json"
+    }
+  ]
 }

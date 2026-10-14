@@ -2,16 +2,25 @@ import { dbGetImageRecord } from '$lib/library/images'
 import type { Album, Track } from '$lib/library/types.ts'
 import { getOrInsertAsync } from './get-or-insert-async.ts'
 
+// Low-level JavaScript FinalizationRegistry safety net
+const blobUrlSafetyNet = new FinalizationRegistry((url: string) => {
+	try {
+		URL.revokeObjectURL(url)
+		if (localStorage.getItem('debug-blob-gc') === '1') {
+			console.debug('[Blob GC] Reclaimed leaked artwork URL:', url)
+		}
+	} catch {}
+})
+
 class Artwork {
 	cacheKey: string
-
 	url: string
-
 	#refCount = 0
 
 	constructor(cacheKey: string, blob: Blob) {
 		this.cacheKey = cacheKey
 		this.url = URL.createObjectURL(blob)
+		blobUrlSafetyNet.register(this, this.url)
 	}
 
 	acquire() {
@@ -68,12 +77,56 @@ type ArtworkSource =
 			blob: Blob
 	  }
 	| {
-			// We can't use blob directly because indexedDB returns fresh references to same data.
 			type: 'imageHash'
 			imageHash: string
 			cacheKey: string
 			size: ArtworkSourceImageSize
 	  }
+
+/**
+ * Maximum pixel dimensions for each artwork size tier.
+ * Keeps GPU texture uploads tiny and eliminates scan-line rendering.
+ * - 'full' (player view): 800px — crisp on 2x retina at 400px display
+ * - 'small' (list/grid thumbnails): 150px — more than enough for ~64px tiles
+ */
+const MAX_DIMENSIONS: Record<ArtworkSourceImageSize, number> = {
+	full: 800,
+	small: 150,
+}
+
+/**
+ * Downscale an image blob off the main thread using createImageBitmap + OffscreenCanvas.
+ * This prevents the browser from uploading a 3000×3000 texture to the GPU.
+ * If the image is already smaller than maxDimension, it passes through untouched.
+ */
+const resizeBlobIfNeeded = async (blob: Blob, maxDimension: number): Promise<Blob> => {
+	// createImageBitmap decodes on the browser's image thread, not the main thread
+	const bitmap = await createImageBitmap(blob)
+
+	const { width, height } = bitmap
+
+	// Already small enough — no resize needed
+	if (width <= maxDimension && height <= maxDimension) {
+		bitmap.close()
+		return blob
+	}
+
+	// Calculate aspect-ratio-preserving target dimensions
+	const scale = maxDimension / Math.max(width, height)
+	const targetWidth = Math.round(width * scale)
+	const targetHeight = Math.round(height * scale)
+
+	const canvas = new OffscreenCanvas(targetWidth, targetHeight)
+	const ctx = canvas.getContext('2d')!
+	// imageSmoothingQuality 'medium' is the sweet spot: fast + good enough for album art
+	ctx.imageSmoothingQuality = 'medium'
+	ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight)
+
+	// Immediately free the full-resolution bitmap from memory
+	bitmap.close()
+
+	return canvas.convertToBlob({ type: 'image/jpeg', quality: 0.85 })
+}
 
 const fetchArtwork = async (source: ArtworkSource): Promise<Artwork | undefined> => {
 	let blob: Blob | undefined
@@ -88,11 +141,15 @@ const fetchArtwork = async (source: ArtworkSource): Promise<Artwork | undefined>
 		return undefined
 	}
 
-	const artwork = new Artwork(source.cacheKey, blob)
+	// Downscale before creating the Blob URL so the DOM only ever receives
+	// a small image. This eliminates scan-line rendering and GPU memory bloat.
+	const maxDim = source.type === 'imageHash'
+		? MAX_DIMENSIONS[source.size]
+		: MAX_DIMENSIONS.full
 
-	// Every requester may have unmounted before the shared fetch resolved,
-	// leaving nobody to release the artwork. The cleanup pass re-checks
-	// the ref count, so a claimed artwork survives this.
+	const resizedBlob = await resizeBlobIfNeeded(blob, maxDim)
+	const artwork = new Artwork(source.cacheKey, resizedBlob)
+
 	scheduleCleanup(artwork)
 
 	return artwork
@@ -165,7 +222,6 @@ export const getTrackManagedArtworkSource = (
 	if (track.image) {
 		return {
 			type: 'blob',
-			// For legacy images its fine to dedupe per track only
 			cacheKey: `track-${track.id}-${size}`,
 			blob: size === 'full' ? track.image.full : track.image.small,
 		}
@@ -194,7 +250,6 @@ export const getAlbumManagedArtworkSource = (album: Album | undefined): ArtworkS
 	if (album.image) {
 		return {
 			type: 'blob',
-			// For legacy images its fine to dedupe per album only
 			cacheKey: `album-${album.id}-${size}`,
 			blob: album.image,
 		}

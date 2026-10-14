@@ -120,6 +120,7 @@ export default defineConfig(async ({ command, isPreview }): Promise<UserConfig> 
 					mode: 'hash',
 					directives: {
 						'default-src': ['none'],
+						'frame-src': ['self'],
 						'script-src': ['self', ...i18n.importMapLoader.cspHashes],
 						'style-src': ['self', 'unsafe-inline'],
 						'img-src': filterFalsy([

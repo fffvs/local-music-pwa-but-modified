@@ -13,16 +13,16 @@ interface HTMLAudioEngineOptions {
 	signal: AbortSignal
 	preservePitch: boolean
 	playbackRate: number
+	blobUrl: string
 }
 
 export class HTMLAudioEngine implements AudioEngineImpl {
 	readonly #audio: HTMLAudioElement
 	readonly #graph: AudioGraph
-
 	readonly #signal: AbortSignal
+	readonly #blobUrl: string
 
 	readonly duration: number
-
 	readonly buffering = false
 
 	get ended(): boolean {
@@ -44,13 +44,15 @@ export class HTMLAudioEngine implements AudioEngineImpl {
 		this.#graph = options.audioGraph
 		this.#signal = options.signal
 		this.#audio = options.audio
+		this.#blobUrl = options.blobUrl
 		this.#playbackRate = options.playbackRate
 		this.#preservePitch = options.preservePitch
 		this.duration = options.audio.duration
+
 		this.#setupElement()
 		this.#setupGraphConnection()
 
-		this.#signal.addEventListener('abort', () => this.#dispose())
+		this.#signal.addEventListener('abort', () => this.#dispose(), { once: true })
 	}
 
 	#setupElement(): void {
@@ -91,7 +93,6 @@ export class HTMLAudioEngine implements AudioEngineImpl {
 	setPlaybackRate(rate: number, preservePitch: boolean): void {
 		this.#playbackRate = rate
 		this.#preservePitch = preservePitch
-
 		this.#updateAudioRate()
 	}
 
@@ -110,11 +111,19 @@ export class HTMLAudioEngine implements AudioEngineImpl {
 	}
 
 	#dispose(): void {
-		cleanupAudioElement(this.#audio)
-		this.#gainNode?.disconnect()
-		this.#sourceNode?.disconnect()
-		this.#gainNode = null
-		this.#sourceNode = null
+		cleanupAudioElement(this.#audio, this.#blobUrl)
+		if (this.#gainNode) {
+			try {
+				this.#gainNode.disconnect()
+			} catch {}
+			this.#gainNode = null
+		}
+		if (this.#sourceNode) {
+			try {
+				this.#sourceNode.disconnect()
+			} catch {}
+			this.#sourceNode = null
+		}
 	}
 
 	#updateAudioRate(): void {
@@ -123,14 +132,21 @@ export class HTMLAudioEngine implements AudioEngineImpl {
 	}
 }
 
-const cleanupAudioElement = (audio: HTMLAudioElement) => {
-	audio.pause()
-	const { src } = audio
-	if (src) {
-		URL.revokeObjectURL(src)
+const cleanupAudioElement = (audio: HTMLAudioElement, blobUrl?: string) => {
+	try {
+		audio.pause()
+	} catch {}
+
+	const urlToRevoke = blobUrl || audio.src
+	if (urlToRevoke && urlToRevoke.startsWith('blob:')) {
+		URL.revokeObjectURL(urlToRevoke)
 	}
 
-	audio.src = ''
+	// Force browser to immediately release hardware decoder & RAM buffer
+	audio.removeAttribute('src')
+	try {
+		audio.load()
+	} catch {}
 }
 
 const loadAudio = (audio: HTMLAudioElement, signal: AbortSignal) => {
@@ -156,7 +172,6 @@ const loadAudio = (audio: HTMLAudioElement, signal: AbortSignal) => {
 
 	audio.onerror = () => {
 		cleanup()
-
 		reject(new Error('Audio element error'))
 	}
 
@@ -166,16 +181,17 @@ const loadAudio = (audio: HTMLAudioElement, signal: AbortSignal) => {
 export const createHTMLAudioEngine = async (options: AudioEngineOptions) => {
 	const { signal } = options
 	const audio = new Audio()
+	audio.preload = 'auto'
 
-	const src = URL.createObjectURL(options.blob)
-	audio.src = src
+	const blobUrl = URL.createObjectURL(options.blob)
+	audio.src = blobUrl
 	audio.playbackRate = options.playbackRate
 	audio.preservesPitch = options.preservePitch
 
 	try {
 		await loadAudio(audio, signal)
 	} catch (error) {
-		cleanupAudioElement(audio)
+		cleanupAudioElement(audio, blobUrl)
 		throw error
 	}
 
@@ -183,6 +199,7 @@ export const createHTMLAudioEngine = async (options: AudioEngineOptions) => {
 		audioGraph: options.audioGraph,
 		signal,
 		audio,
+		blobUrl,
 		playbackRate: options.playbackRate,
 		preservePitch: options.preservePitch,
 	})

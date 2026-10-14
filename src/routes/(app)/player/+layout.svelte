@@ -71,7 +71,7 @@
 		class={[
 			layoutMode === 'both' && 'w-100 2xl:w-[28dvw]',
 			layoutMode === 'list' && 'mx-auto w-full',
-			'player-content z-0 grow items-center gap-x-6 overflow-clip bg-secondaryContainerVariant pb-6',
+			'player-content z-0 grow items-center gap-x-6 overflow-clip bg-secondaryContainerVariant pb-6 relative',
 			isCompactVertical && !isCompactHorizontal && 'player-content-horizontal',
 		]}
 	>
@@ -134,6 +134,40 @@
 
 							<div class="border-t border-onSecondaryContainer/10"></div>
 						{/if}
+
+                                                <!-- Stereo Balance (With instant click-to-center reset triggers) -->
+                                                <div class="grid grid-cols-[max-content_minmax(0,1fr)_max-content] items-center gap-2 mt-2">
+                                                        <button 
+                                                                class="flex items-center justify-center size-8 rounded-full border border-onSecondaryContainer/15 text-xs font-black select-none text-onSecondaryContainer/70 hover:bg-onSecondaryContainer/10 hover:text-onSecondaryContainer active:scale-95 transition-all cursor-pointer"
+                                                                onclick={() => player.stereoPan = 0}
+                                                                title="Reset Balance (Center)"
+                                                        >
+                                                                L
+                                                        </button>
+
+                                                        <Slider
+                                                                min={-1.0}
+                                                                max={1.0}
+                                                                step={0.1}
+                                                                bind:value={() => player.stereoPan, (v) => (player.stereoPan = v)}
+                                                                format={(val) => {
+                                                                        if (val === 0) return 'Center';
+                                                                        return val < 0 ? `L ${Math.abs(val * 100).toFixed(0)}%` : `R ${(val * 100).toFixed(0)}%`;
+                                                                }}
+                                                        />
+
+                                                        <button 
+                                                                class="flex items-center justify-center size-8 rounded-full border border-onSecondaryContainer/15 text-xs font-black select-none text-onSecondaryContainer/70 hover:bg-onSecondaryContainer/10 hover:text-onSecondaryContainer active:scale-95 transition-all cursor-pointer"
+                                                                onclick={() => player.stereoPan = 0}
+                                                                title="Reset Balance (Center)"
+                                                        >
+                                                                R
+                                                        </button>
+                                                </div>
+
+                                                <div class="border-t border-onSecondaryContainer/10"></div>
+
+												
 
 						<Button
 							kind="blank"

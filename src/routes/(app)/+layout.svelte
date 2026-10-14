@@ -41,7 +41,219 @@
 		})
 	}
 
-	setupTheme()
+	
+        setupTheme()
+
+        // 1. Continue Where You Left Off QoL Prompt on Mount
+        $effect(() => {
+                if (!browser) return;
+
+                setTimeout(() => {
+                        const savedTrackId = localStorage.getItem('snaeplayer-resume-trackId');
+                        const savedTime = localStorage.getItem('snaeplayer-resume-time');
+
+                        if (player.resumeOnStartup && savedTrackId && savedTime) {
+                                const trackId = parseInt(savedTrackId, 10);
+                                const time = parseFloat(savedTime);
+
+                                if (time > 10) {
+                                        import('$lib/library/get/value.ts').then(({ getLibraryValue }) => {
+                                                getLibraryValue('tracks', trackId).then(track => {
+                                                        if (track) {
+                                                                import('$lib/components/snackbar/snackbar.ts').then(({ snackbar }) => {
+                                                                        snackbar({
+                                                                                id: 'resume-playback',
+                                                                                message: `Continue listening to "${track.name}"?`,
+                                                                                duration: 8000,
+                                                                                controls: {
+                                                                                        label: 'Resume',
+                                                                                        action: () => {
+                                                                                                player.playTrackId(trackId);
+                                                                                                setTimeout(() => {
+                                                                                                        player.seek(time);
+                                                                                                }, 450);
+                                                                                        }
+                                                                                }
+                                                                        });
+                                                                });
+                                                        }
+                                                }).catch(() => {});
+                                        });
+                                }
+                        }
+                }, 1000);
+        });
+
+        // 2. Dynamic Favicon & Title QoL Effect
+        let originalFaviconHref = '';
+        let originalTitle = '';
+
+        $effect(() => {
+                if (!browser) return;
+
+                const enabled = player.dynamicFaviconEnabled;
+                const activeTrack = player.activeTrack;
+                const isPlaying = player.playing;
+                const artworkSrc = player.artworkSrc;
+
+                const faviconLink = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
+                if (faviconLink && !originalFaviconHref) {
+                        originalFaviconHref = faviconLink.href;
+                }
+                if (!originalTitle) {
+                        originalTitle = document.title || 'Snae Player';
+                }
+
+                if (!enabled || !activeTrack) {
+                        if (faviconLink && originalFaviconHref) {
+                                if (faviconLink.href && faviconLink.href.startsWith('blob:')) {
+                                        URL.revokeObjectURL(faviconLink.href);
+                                }
+                                faviconLink.href = originalFaviconHref;
+                        }
+                        document.title = originalTitle;
+                        return;
+                }
+
+                const stateSymbol = isPlaying ? '▶ ' : '❚❚ ';
+                const trackName = activeTrack.name || 'Unknown Track';
+                const albumName = activeTrack.album || 'Unknown Album';
+                document.title = `${stateSymbol}${trackName} — ${albumName}`;
+
+                if (artworkSrc && faviconLink) {
+                        const img = new Image();
+                        img.crossOrigin = 'anonymous';
+                        img.src = artworkSrc;
+                        img.onload = () => {
+                                const canvas = document.createElement('canvas');
+                                canvas.width = 32;
+                                canvas.height = 32;
+                                const ctx = canvas.getContext('2d');
+                                if (ctx) {
+                                        ctx.drawImage(img, 0, 0, 32, 32);
+                                        canvas.toBlob((blob) => {
+                                                if (blob) {
+                                                        if (faviconLink.href && faviconLink.href.startsWith('blob:')) {
+                                                                URL.revokeObjectURL(faviconLink.href);
+                                                        }
+                                                        faviconLink.href = URL.createObjectURL(blob);
+                                                }
+                                        }, 'image/png');
+                                }
+                        };
+                } else if (faviconLink && originalFaviconHref) {
+                        if (faviconLink.href && faviconLink.href.startsWith('blob:')) {
+                                URL.revokeObjectURL(faviconLink.href);
+                        }
+                        faviconLink.href = originalFaviconHref;
+                }
+        });
+
+        // 3. Snae Player Strict Code Guard (Luau --!strict equivalent)
+        $effect(() => {
+                if (!browser) return;
+
+                console.log('%c🛡️ Snae Strict Mode Active: Monitoring runtime execution...', 'color: #4af2a1; font-weight: bold; font-family: monospace;');
+
+                let perfObserver: PerformanceObserver | null = null;
+                try {
+                        perfObserver = new PerformanceObserver((list) => {
+                                for (const entry of list.getEntries()) {
+                                        if (entry.duration > 50) {
+                                                console.warn(
+                                                        `%c[Strict: Performance] Long task detected! A script blocked the main thread for ${entry.duration.toFixed(1)}ms. This can cause audio stutter.`,
+                                                        'color: #ffaa00; font-weight: bold;'
+                                                );
+                                        }
+                                }
+                        });
+                        perfObserver.observe({ entryTypes: ['longtask'] });
+                } catch (e) {}
+
+                const handleRejection = (event: PromiseRejectionEvent) => {
+                        console.error(
+                                '%c[Strict: Promise] Uncaught async rejection detected! You have a promise that failed without a .catch() handler.',
+                                'color: #ff5555; font-weight: bold;'
+                        );
+                        console.error(event.reason);
+                };
+
+                const handleGlobalError = (event: ErrorEvent) => {
+                        if (event.message && event.message.includes('ResizeObserver')) {
+                                return;
+                        }
+                        console.error(
+                                `[Strict: Exception] ${event.message} inside ${event.filename} at line ${event.lineno}`
+                        );
+                };
+
+                const originalWarn = console.warn;
+                console.warn = (...args: any[]) => {
+                        const warnStr = args.join(' ');
+                        if (warnStr.includes('svelte') || warnStr.includes('rune') || warnStr.includes('state')) {
+                                console.group('%c[Strict: Svelte Reactivity Warning]', 'color: #ff5555; font-weight: bold;');
+                                originalWarn(...args);
+                                console.trace('Reactivity Warning Stack Trace');
+                                console.groupEnd();
+                                return;
+                        }
+                        originalWarn(...args);
+                };
+
+                let clipInterval = 0;
+                if (player.audioContext) {
+                        try {
+                                const analyser = player.analyserNode;
+                                if (analyser) {
+                                        const buffer = new Float32Array(analyser.fftSize);
+                                        clipInterval = window.setInterval(() => {
+                                                if (!player.playing) return;
+                                                analyser.getFloatTimeDomainData(buffer);
+                                                for (let i = 0; i < buffer.length; i++) {
+                                                        if (Math.abs(buffer[i]) >= 0.99) {
+                                                                console.warn('%c[Strict: Audio] Output is clipping! Pre-amp or EQ gain is too high, causing hardware distortion.', 'color: #ffaa00; font-style: italic;');
+                                                                break;
+                                                        }
+                                                }
+                                        }, 1000);
+                                }
+                        } catch (e) {}
+                }
+
+                window.addEventListener('unhandledrejection', handleRejection);
+                window.addEventListener('error', handleGlobalError);
+
+                return () => {
+                        if (perfObserver) perfObserver.disconnect();
+                        if (clipInterval) clearInterval(clipInterval);
+                        console.warn = originalWarn;
+                        window.removeEventListener('unhandledrejection', handleRejection);
+                        window.removeEventListener('error', handleGlobalError);
+                };
+        });
+
+        // 5. AudioContext Tab-Sleep Auto-Recovery Heartbeat
+        $effect(() => {
+                if (!browser) return;
+
+                const handleVisibilityChange = () => {
+                        if (document.visibilityState === 'visible' && player.audioContext) {
+                                const ctx = player.audioContext;
+                                if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
+                                        console.log('[Context Recovery] Waking up suspended AudioContext due to tab activation.');
+                                        ctx.resume().catch(e => console.warn('[Context Recovery] Failed to auto-resume:', e));
+                                }
+                        }
+                };
+
+                document.addEventListener('visibilitychange', handleVisibilityChange);
+                return () => {
+                        document.removeEventListener('visibilitychange', handleVisibilityChange);
+                };
+        });
+
+
+
 	setupGlobalMenu()
 	setupAppInstallPromptListeners()
 

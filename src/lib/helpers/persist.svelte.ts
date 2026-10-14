@@ -1,50 +1,67 @@
 const getValue = (key: string) => {
-	try {
-		const valueRaw = localStorage.getItem(key)
-		const value = valueRaw === null || valueRaw === undefined ? null : JSON.parse(valueRaw)
-
-		return value
-	} catch (error) {
-		console.error(`Failed to get persisted value for key "${key}"`, error)
-
-		return null
-	}
+        try {
+                const valueRaw = localStorage.getItem(key)
+                const value = valueRaw === null || valueRaw === undefined ? null : JSON.parse(valueRaw)
+                return value
+        } catch (error) {
+                console.error(`Failed to get persisted value for key "${key}"`, error)
+                return null
+        }
 }
 
 const getStorageKey = (storeName: string, key: string) => `snaeplayer-${storeName}.${key}`
 
 export const getPersistedValue = <T, D = null>(
-	storeName: string,
-	key: string,
-	defaultValue: D = null as D,
+        storeName: string,
+        key: string,
+        defaultValue: D = null as D,
 ): T | D => {
-	const fullKey = getStorageKey(storeName, key)
-	const value = getValue(fullKey)
-
-	return value ?? defaultValue
+        const fullKey = getStorageKey(storeName, key)
+        const value = getValue(fullKey)
+        return value ?? defaultValue
 }
 
 export const persist = <T>(storeName: string, instance: T, keys: (keyof T & string)[]): void => {
-	$effect.root(() => {
-		for (const key of keys) {
-			const storageKey = getStorageKey(storeName, key)
+        $effect.root(() => {
+                for (const key of keys) {
+                        const storageKey = getStorageKey(storeName, key)
 
-			const value = getValue(storageKey)
-			if (value !== null) {
-				instance[key] = value
-			}
+                        const value = getValue(storageKey)
+                        if (value !== null) {
+                                instance[key] = value
+                        }
 
-			let initial = true
-			$effect(() => {
-				const updatedValue = instance[key]
+                        let initial = true
+                        let debounceTimer: number | null = null
 
-				if (initial) {
-					initial = false
-					return
-				}
+                        $effect(() => {
+                                const updatedValue = instance[key]
 
-				localStorage.setItem(storageKey, JSON.stringify(updatedValue))
-			})
-		}
-	})
+                                if (initial) {
+                                        initial = false
+                                        return
+                                }
+
+                                // Debounce disk write by 200ms to eliminate slider stutter
+                                if (debounceTimer !== null) {
+                                        clearTimeout(debounceTimer)
+                                }
+
+                                debounceTimer = window.setTimeout(() => {
+                                        try {
+                                                localStorage.setItem(storageKey, JSON.stringify(updatedValue))
+                                        } catch (e) {
+                                                console.error('[persist] localStorage write error:', e)
+                                        }
+                                        debounceTimer = null
+                                }, 200)
+
+                                return () => {
+                                        if (debounceTimer !== null) {
+                                                clearTimeout(debounceTimer)
+                                        }
+                                }
+                        })
+                }
+        })
 }
