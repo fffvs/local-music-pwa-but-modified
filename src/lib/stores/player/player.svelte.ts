@@ -133,6 +133,9 @@ export class PlayerStore {
 	get duration() {
 		return this.#controller.duration
 	}
+	get trackFormat() {
+		return this.#controller.format
+	}
 	get loading() {
 		return this.#controller.loading
 	}

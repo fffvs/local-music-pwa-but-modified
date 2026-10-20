@@ -101,6 +101,18 @@
 						<div class="truncate text-body-md text-onSecondaryContainer">
 							{formatArtists(activeTrack.artists)}
 						</div>
+						{#if player.trackFormat}
+							<div class="flex min-w-0 items-center gap-2 pt-1">
+								<span
+									class="shrink-0 rounded-md border px-1.5 py-0.5 text-label-sm select-none {player.trackFormat.hiRes
+										? 'border-primary text-primary'
+										: 'border-onSecondaryContainer/30 text-onSecondaryContainer/70'}"
+									title={player.trackFormat.hiRes ? 'Hi-res audio' : undefined}
+								>
+									{player.trackFormat.label}
+								</span>
+							</div>
+						{/if}
 					</div>
 				{/if}
 
