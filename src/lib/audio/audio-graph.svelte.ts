@@ -2,6 +2,23 @@ import { EQ_BANDS } from './eq-bands.ts'
 import invariant from 'tiny-invariant'
 
 /**
+ * Options for the shared AudioContext. Music playback has no interactive
+ * latency requirement, so 'playback' is used: a larger output buffer means the
+ * audio thread wakes less often and is less likely to underrun on a loaded CPU.
+ * Bit-perfect mode matches the context rate to the file's native rate.
+ */
+export const createAudioContextOptions = (
+	bitPerfectEnabled: boolean,
+	nativeSampleRate: number | null,
+): AudioContextOptions => {
+	const options: AudioContextOptions = { latencyHint: 'playback' }
+	if (bitPerfectEnabled && nativeSampleRate) {
+		options.sampleRate = nativeSampleRate
+	}
+	return options
+}
+
+/**
  * Owns the AudioContext, EQ filter chain, volume, compressor, stereo panner, and cached procedural reverb.
  */
 export class AudioGraph {
@@ -106,10 +123,9 @@ export class AudioGraph {
 			return this.#context
 		}
 
-		const options: AudioContextOptions = {}
-		if (this.bitPerfectEnabled && this.#nativeSampleRate) {
-			options.sampleRate = this.#nativeSampleRate
-			console.log(`[Bit-Perfect] Initializing AudioContext at: ${this.#nativeSampleRate}Hz`)
+		const options = createAudioContextOptions(this.bitPerfectEnabled, this.#nativeSampleRate)
+		if (options.sampleRate) {
+			console.log(`[Bit-Perfect] Initializing AudioContext at: ${options.sampleRate}Hz`)
 		}
 
 		const ctx = new AudioContext(options)

@@ -913,29 +913,29 @@ describe('PlayerStore', () => {
 	})
 
 	describe('preload effect', () => {
-		it('calls preloadNext with the next track id when within 10 seconds of the end', () => {
+		it('calls preloadNext with the next track id when within 60 seconds of the end', () => {
 			seedTrack(1)
 			seedTrack(2)
 			player.playFrom(0, [1, 2])
 			flushSync()
 			vi.clearAllMocks()
 
-			ctrl.duration = 30
-			ctrl.currentTime = 25 // 5 seconds remaining
+			ctrl.duration = 120
+			ctrl.currentTime = 70 // 50 seconds remaining
 			flushSync()
 
 			expect(ctrl.preloadNext).toHaveBeenCalledWith(2)
 		})
 
-		it('does not preload when more than 10 seconds remain', () => {
+		it('does not preload when more than 60 seconds remain', () => {
 			seedTrack(1)
 			seedTrack(2)
 			player.playFrom(0, [1, 2])
 			flushSync()
 			vi.clearAllMocks()
 
-			ctrl.duration = 60
-			ctrl.currentTime = 10 // 50 seconds remaining
+			ctrl.duration = 300
+			ctrl.currentTime = 10 // 290 seconds remaining
 			flushSync()
 
 			expect(ctrl.preloadNext).not.toHaveBeenCalled()
