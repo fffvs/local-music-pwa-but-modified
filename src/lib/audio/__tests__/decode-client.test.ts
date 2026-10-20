@@ -119,7 +119,8 @@ describe('openDecodeWorker', () => {
 		expect(chunks).toHaveLength(1)
 		expect(ctx.createBuffer).toHaveBeenCalledWith(2, 4, 48_000)
 		const types = firstWorker().requests.map((request) => request.type)
-		expect(types).toEqual(['open', 'stream', 'next', 'next', 'closeStream'])
+		// Two chunk requests are prefetched, and a third is issued after the first chunk arrives.
+		expect(types).toEqual(['open', 'stream', 'next', 'next', 'next', 'closeStream'])
 	})
 
 	it('returns null when the browser cannot decode the track', async () => {

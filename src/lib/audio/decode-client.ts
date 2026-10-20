@@ -19,6 +19,9 @@ export interface DecodeWorkerHandle {
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
 
+/** How many chunk requests may be outstanding while a stream is being read. */
+const PREFETCH_DEPTH = 2
+
 const abortError = () => new DOMException('Decode worker terminated', 'AbortError')
 
 /**
@@ -106,12 +109,30 @@ export const openDecodeWorker = async (file: Blob): Promise<DecodeWorkerHandle |
 			nextStreamId += 1
 			await request({ type: 'stream', streamId, startTime })
 
+			// Keep a few chunk requests in flight so the worker decodes ahead of
+			// playback instead of waiting for each round trip.
+			const inFlight: Promise<DecodeResponse>[] = []
+			const fill = () => {
+				while (inFlight.length < PREFETCH_DEPTH) {
+					const pendingChunk = request({ type: 'next', streamId })
+					// Responses we never read (after an abort) must not surface as unhandled.
+					pendingChunk.catch(() => {})
+					inFlight.push(pendingChunk)
+				}
+			}
+
 			try {
+				fill()
 				while (true) {
-					const response = await request({ type: 'next', streamId })
+					const next = inFlight.shift()
+					if (!next) {
+						return
+					}
+					const response = await next
 					if (response.type !== 'chunk' || response.done) {
 						return
 					}
+					fill()
 
 					const buffer = ctx.createBuffer(
 						response.channels.length,

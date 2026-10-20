@@ -36,7 +36,11 @@ interface TrackEndPlan {
 }
 
 // How many seconds before track end to begin pre-buffering the next track.
-const PRE_BUFFER_THRESHOLD_SECONDS = 10
+// Opening a large lossless file (header, seek index, first decoded chunks) can
+// take several seconds on slower hardware, so this leaves enough runway for the
+// gapless handoff. Repeat calls are cheap: preloadNext() returns early when the
+// same track is already queued.
+const PRE_BUFFER_THRESHOLD_SECONDS = 60
 
 export const PLAYER_PLAYBACK_RATE_MIN = 0.5
 export const PLAYER_PLAYBACK_RATE_MAX = 2

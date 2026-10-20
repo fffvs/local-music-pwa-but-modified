@@ -17,10 +17,25 @@ declare const self: DedicatedWorkerGlobalScope
 
 const FORMATS = [FLAC, MP3, MP4, OGG, WAVE, WEBM]
 
+/**
+ * Decoded packets are grouped into chunks of about this many seconds. A FLAC
+ * packet is only a few thousand samples, so grouping them cuts the number of
+ * worker messages and AudioBufferSourceNodes by roughly an order of magnitude.
+ */
+const CHUNK_SECONDS = 0.5
+
+interface StreamState {
+	samples: AsyncGenerator<AudioSample, void, unknown>
+	/** A sample read ahead that did not fit the current chunk (e.g. format change). */
+	carry: AudioSample | null
+	/** Serializes `next` requests so chunks are produced in order. */
+	queue: Promise<void>
+}
+
 // One worker serves one track, so there is at most one open input at a time.
 let input: Input | null = null
 let track: InputAudioTrack | null = null
-const streams = new Map<number, AsyncGenerator<AudioSample, void, unknown>>()
+const streams = new Map<number, StreamState>()
 
 const reply = (message: DecodeResponse, transfer: Transferable[] = []): void => {
 	self.postMessage(message, transfer)
@@ -46,41 +61,125 @@ const handleOpen = async (id: number, file: Blob): Promise<void> => {
 	})
 }
 
-const handleNext = async (id: number, streamId: number): Promise<void> => {
-	const stream = streams.get(streamId)
-	const result = stream ? await stream.next() : { done: true as const, value: undefined }
+const readSample = async (state: StreamState): Promise<AudioSample | null> => {
+	if (state.carry) {
+		const carried = state.carry
+		state.carry = null
+		return carried
+	}
+	const result = await state.samples.next()
+	return result.done ? null : result.value
+}
 
-	if (result.done) {
+/** Reads consecutive samples until about CHUNK_SECONDS of audio has been collected. */
+const collectGroup = async (state: StreamState): Promise<AudioSample[]> => {
+	const group: AudioSample[] = []
+	let frames = 0
+	let targetFrames = 0
+
+	while (true) {
+		const sample = await readSample(state)
+		if (!sample) {
+			break
+		}
+
+		const first = group[0]
+		if (
+			first &&
+			(sample.sampleRate !== first.sampleRate ||
+				sample.numberOfChannels !== first.numberOfChannels)
+		) {
+			// Format changed: keep this sample for the next chunk.
+			state.carry = sample
+			break
+		}
+
+		group.push(sample)
+		frames += sample.numberOfFrames
+		if (targetFrames === 0) {
+			targetFrames = Math.round(sample.sampleRate * CHUNK_SECONDS)
+		}
+		if (frames >= targetFrames) {
+			break
+		}
+	}
+
+	return group
+}
+
+/** Copies a group of samples into one planar buffer per channel and closes them. */
+const mergeGroup = (group: AudioSample[]): { channels: Float32Array[]; numberOfFrames: number } => {
+	const numberOfFrames = group.reduce((total, sample) => total + sample.numberOfFrames, 0)
+	const numberOfChannels = group[0]?.numberOfChannels ?? 0
+	const channels = Array.from(
+		{ length: numberOfChannels },
+		() => new Float32Array(numberOfFrames),
+	)
+
+	let offset = 0
+	try {
+		for (const sample of group) {
+			for (let planeIndex = 0; planeIndex < numberOfChannels; planeIndex += 1) {
+				const target = channels[planeIndex]
+				if (!target) {
+					continue
+				}
+				// Each sample writes into its own slice of the shared plane.
+				sample.copyTo(target.subarray(offset, offset + sample.numberOfFrames), {
+					planeIndex,
+					format: 'f32-planar',
+				})
+			}
+			offset += sample.numberOfFrames
+		}
+	} finally {
+		for (const sample of group) {
+			sample.close()
+		}
+	}
+
+	return { channels, numberOfFrames }
+}
+
+const produceChunk = async (id: number, streamId: number, state: StreamState): Promise<void> => {
+	const group = await collectGroup(state)
+	const first = group[0]
+
+	if (!first) {
 		streams.delete(streamId)
+		void state.samples.return(undefined)
 		reply({ id, type: 'chunk', done: true })
 		return
 	}
 
-	const sample = result.value
-	try {
-		const numberOfFrames = sample.numberOfFrames
-		const channels: Float32Array[] = []
-		for (let planeIndex = 0; planeIndex < sample.numberOfChannels; planeIndex += 1) {
-			const plane = new Float32Array(numberOfFrames)
-			sample.copyTo(plane, { planeIndex, format: 'f32-planar' })
-			channels.push(plane)
-		}
+	const { timestamp, sampleRate } = first
+	const { channels, numberOfFrames } = mergeGroup(group)
 
-		reply(
-			{
-				id,
-				type: 'chunk',
-				done: false,
-				timestamp: sample.timestamp,
-				sampleRate: sample.sampleRate,
-				numberOfFrames,
-				channels,
-			},
-			channels.map((channel) => channel.buffer),
-		)
-	} finally {
-		sample.close()
+	reply(
+		{
+			id,
+			type: 'chunk',
+			done: false,
+			timestamp,
+			sampleRate,
+			numberOfFrames,
+			channels,
+		},
+		channels.map((channel) => channel.buffer),
+	)
+}
+
+const handleNext = (id: number, streamId: number): Promise<void> => {
+	const state = streams.get(streamId)
+	if (!state) {
+		reply({ id, type: 'chunk', done: true })
+		return Promise.resolve()
 	}
+
+	// Chain onto the previous request so chunks always come back in order.
+	const run = state.queue.then(() => produceChunk(id, streamId, state))
+	state.queue = run.catch(() => {})
+	return run
 }
 
 const handleMessage = (request: DecodeRequest): Promise<void> => {
@@ -93,7 +192,11 @@ const handleMessage = (request: DecodeRequest): Promise<void> => {
 				return Promise.reject(new Error('Decode worker has no open track'))
 			}
 			const sink = new AudioSampleSink(track)
-			streams.set(request.streamId, sink.samples(request.startTime))
+			streams.set(request.streamId, {
+				samples: sink.samples(request.startTime),
+				carry: null,
+				queue: Promise.resolve(),
+			})
 			reply({ id: request.id, type: 'ack' })
 			return Promise.resolve()
 		}
@@ -102,9 +205,9 @@ const handleMessage = (request: DecodeRequest): Promise<void> => {
 			return handleNext(request.id, request.streamId)
 
 		case 'closeStream': {
-			const stream = streams.get(request.streamId)
+			const state = streams.get(request.streamId)
 			streams.delete(request.streamId)
-			void stream?.return(undefined)
+			void state?.samples.return(undefined)
 			reply({ id: request.id, type: 'ack' })
 			return Promise.resolve()
 		}
