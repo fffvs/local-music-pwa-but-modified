@@ -3,16 +3,14 @@ import { CURRENT_METADATA_VERSION, type ParsedTrackData, UNKNOWN_ITEM } from '$l
 
 const artistSeparatorRegex = /,|&/
 
-// 2GB safety limit
-const FILE_SIZE_LIMIT = 2 * 1024 * 1024 * 1024
-
 /** @public */
 export const parseTrackMetadata = async (
 	file: File,
 ): Promise<{ data: ParsedTrackData; imageBlob?: Blob } | null> => {
-	if (file.size > FILE_SIZE_LIMIT) {
-		return null
-	}
+	// No file size cap: the parse below only reads the header region, so
+	// memory and time are independent of the total file size. A size limit
+	// here would silently drop large lossless files (e.g. 10 GB FLAC) from
+	// the library.
 
 	// STREAMING PARSE: Only reads the metadata headers (typically < 5MB)
 	// instead of loading the entire file into RAM.

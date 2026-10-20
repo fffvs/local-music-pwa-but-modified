@@ -16,6 +16,7 @@ export class AudioGraph {
 	#wetGainNode: GainNode | null = null
 	#filters: BiquadFilterNode[] = []
 	#suspendTimeout: number | null = null
+	#reverbReleaseTimeout: number | null = null
 	#nativeSampleRate: number | null = null
 
 	// Cache synthesized impulse responses to avoid 2M+ loop recalculations
@@ -194,7 +195,25 @@ export class AudioGraph {
 		if (preset === 'off') {
 			this.#dryGainNode.gain.setTargetAtTime(1.0, t, 0.03)
 			this.#wetGainNode.gain.setTargetAtTime(0.0, t, 0.03)
+			// A ConvolverNode with a null buffer outputs silence without doing any
+			// convolution. Clear the IR once the wet path has faded out so the
+			// (CPU-expensive) convolution stops running on low-power devices.
+			const convolver = this.#convolverNode
+			if (this.#reverbReleaseTimeout !== null) {
+				clearTimeout(this.#reverbReleaseTimeout)
+			}
+			this.#reverbReleaseTimeout = window.setTimeout(() => {
+				this.#reverbReleaseTimeout = null
+				if (this.reverbPreset === 'off') {
+					convolver.buffer = null
+				}
+			}, 300)
 			return
+		}
+
+		if (this.#reverbReleaseTimeout !== null) {
+			clearTimeout(this.#reverbReleaseTimeout)
+			this.#reverbReleaseTimeout = null
 		}
 
 		const configs = {
@@ -278,6 +297,11 @@ export class AudioGraph {
 		if (this.#suspendTimeout !== null) {
 			clearTimeout(this.#suspendTimeout)
 			this.#suspendTimeout = null
+		}
+
+		if (this.#reverbReleaseTimeout !== null) {
+			clearTimeout(this.#reverbReleaseTimeout)
+			this.#reverbReleaseTimeout = null
 		}
 
 		this.#reverbCache.clear()
