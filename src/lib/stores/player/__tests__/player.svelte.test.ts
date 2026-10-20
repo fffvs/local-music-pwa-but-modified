@@ -234,6 +234,54 @@ describe('PlayerStore', () => {
 		})
 	})
 
+	describe('cycleAbLoop', () => {
+		beforeEach(() => {
+			seedTrack(1)
+			player.playFrom(0, [1, 2, 3])
+			flushSync()
+		})
+
+		it('cycles unset → A → B → cleared', () => {
+			expect(player.abLoop).toBeNull()
+
+			ctrl.currentTime = 10
+			player.cycleAbLoop()
+			expect(player.abLoop).toEqual({ trackId: 1, start: 10, end: null })
+
+			ctrl.currentTime = 20
+			player.cycleAbLoop()
+			expect(player.abLoop).toEqual({ trackId: 1, start: 10, end: 20 })
+
+			player.cycleAbLoop()
+			expect(player.abLoop).toBeNull()
+		})
+
+		it('ignores a B point that is not at least 1s after A', () => {
+			ctrl.currentTime = 10
+			player.cycleAbLoop()
+
+			ctrl.currentTime = 10.5
+			player.cycleAbLoop()
+			expect(player.abLoop).toEqual({ trackId: 1, start: 10, end: null })
+		})
+
+		it('seeks back to A once playback reaches B', () => {
+			ctrl.currentTime = 10
+			player.cycleAbLoop()
+			ctrl.currentTime = 20
+			player.cycleAbLoop()
+			ctrl.seek.mockClear()
+
+			ctrl.currentTime = 19
+			flushSync()
+			expect(ctrl.seek).not.toHaveBeenCalled()
+
+			ctrl.currentTime = 20.25
+			flushSync()
+			expect(ctrl.seek).toHaveBeenCalledWith(10)
+		})
+	})
+
 	describe('playFrom', () => {
 		it('calls controller.play with the correct track id and fromBeginning', () => {
 			seedTrack(1)

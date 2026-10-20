@@ -12,6 +12,7 @@
 	import PlayPrevButton from '$lib/components/player/buttons/PlayPrevButton.svelte'
 	import PlayTogglePillButton from '$lib/components/player/buttons/PlayTogglePillButton.svelte'
 	import RepeatButton from '$lib/components/player/buttons/RepeatButton.svelte'
+	import AbLoopButton from '$lib/components/player/buttons/AbLoopButton.svelte'
 	import ShuffleButton from '$lib/components/player/buttons/ShuffleButton.svelte'
 	import PlayerArtwork from '$lib/components/player/PlayerArtwork.svelte'
 	import Timeline from '$lib/components/player/Timeline.svelte'
@@ -197,6 +198,8 @@
 							<PlayNextButton />
 
 							<RepeatButton />
+
+							<AbLoopButton />
 						</div>
 					</div>
 				{/if}

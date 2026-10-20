@@ -16,6 +16,9 @@ export class AudioGraph {
 	#wetGainNode: GainNode | null = null
 	#filters: BiquadFilterNode[] = []
 	#suspendTimeout: number | null = null
+	#reverbReleaseTimeout: number | null = null
+	#eqBypassTimeout: number | null = null
+	#eqBypassed = false
 	#nativeSampleRate: number | null = null
 
 	// Cache synthesized impulse responses to avoid 2M+ loop recalculations
@@ -44,6 +47,54 @@ export class AudioGraph {
 	get filters(): readonly BiquadFilterNode[] {
 		this.#ensureGraph()
 		return this.#filters
+	}
+
+	/**
+	 * Routes the input around the 10-band EQ when it is flat or disabled, so the
+	 * biquad filters don't consume CPU for no audible change. Bypassing is deferred
+	 * until the gains have faded to zero to avoid a click; un-bypassing is immediate.
+	 */
+	setEqBypassed(bypassed: boolean): void {
+		if (!this.#context || !this.#inputNode || this.#filters.length === 0) return
+		if (bypassed === this.#eqBypassed && this.#eqBypassTimeout === null) return
+
+		if (this.#eqBypassTimeout !== null) {
+			clearTimeout(this.#eqBypassTimeout)
+			this.#eqBypassTimeout = null
+		}
+
+		if (!bypassed) {
+			this.#applyEqRouting(false)
+			return
+		}
+
+		this.#eqBypassTimeout = window.setTimeout(() => {
+			this.#eqBypassTimeout = null
+			this.#applyEqRouting(true)
+		}, 150)
+	}
+
+	#applyEqRouting(bypassed: boolean): void {
+		const input = this.#inputNode
+		const first = this.#filters[0]
+		const last = this.#filters[this.#filters.length - 1]
+		const compressor = this.#compressorNode
+		if (!input || !first || !last || !compressor || bypassed === this.#eqBypassed) return
+
+		try {
+			if (bypassed) {
+				input.disconnect(first)
+				last.disconnect(compressor)
+				input.connect(compressor)
+			} else {
+				input.disconnect(compressor)
+				input.connect(first)
+				last.connect(compressor)
+			}
+			this.#eqBypassed = bypassed
+		} catch {
+			// Graph was torn down concurrently; nothing to route.
+		}
 	}
 
 	setNextNativeSampleRate(rate: number) {
@@ -194,7 +245,25 @@ export class AudioGraph {
 		if (preset === 'off') {
 			this.#dryGainNode.gain.setTargetAtTime(1.0, t, 0.03)
 			this.#wetGainNode.gain.setTargetAtTime(0.0, t, 0.03)
+			// A ConvolverNode with a null buffer outputs silence without doing any
+			// convolution. Clear the IR once the wet path has faded out so the
+			// (CPU-expensive) convolution stops running on low-power devices.
+			const convolver = this.#convolverNode
+			if (this.#reverbReleaseTimeout !== null) {
+				clearTimeout(this.#reverbReleaseTimeout)
+			}
+			this.#reverbReleaseTimeout = window.setTimeout(() => {
+				this.#reverbReleaseTimeout = null
+				if (this.reverbPreset === 'off') {
+					convolver.buffer = null
+				}
+			}, 300)
 			return
+		}
+
+		if (this.#reverbReleaseTimeout !== null) {
+			clearTimeout(this.#reverbReleaseTimeout)
+			this.#reverbReleaseTimeout = null
 		}
 
 		const configs = {
@@ -279,6 +348,17 @@ export class AudioGraph {
 			clearTimeout(this.#suspendTimeout)
 			this.#suspendTimeout = null
 		}
+
+		if (this.#reverbReleaseTimeout !== null) {
+			clearTimeout(this.#reverbReleaseTimeout)
+			this.#reverbReleaseTimeout = null
+		}
+
+		if (this.#eqBypassTimeout !== null) {
+			clearTimeout(this.#eqBypassTimeout)
+			this.#eqBypassTimeout = null
+		}
+		this.#eqBypassed = false
 
 		this.#reverbCache.clear()
 

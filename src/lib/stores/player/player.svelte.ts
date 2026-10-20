@@ -270,6 +270,7 @@ export class PlayerStore {
                 this.#setupVolumeEffect()
 		this.#setupPlaybackRateEffect()
 		this.#setupPlayHistoryUpdateEffect()
+		this.#setupAbLoopEffect()
 	}
 
 	#setupQueueDatabaseListener(): void {
@@ -476,6 +477,29 @@ export class PlayerStore {
 		}
 	}
 
+	/**
+	 * A-B loop for the active track. Cycling the button sets A (current position),
+	 * then B (loop end), then clears the loop. The loop is scoped to one track and
+	 * is dropped automatically when the track changes.
+	 */
+	abLoop: { trackId: number; start: number; end: number | null } | null = $state(null)
+
+	cycleAbLoop = (): void => {
+		const trackId = this.activeTrack?.id
+		if (trackId === undefined) return
+
+		const loop = this.abLoop
+		if (loop === null || loop.trackId !== trackId) {
+			this.abLoop = { trackId, start: this.currentTime, end: null }
+		} else if (loop.end === null) {
+			// Ignore a B point that isn't meaningfully after A (e.g. pressed twice fast).
+			if (this.currentTime - loop.start < 1) return
+			this.abLoop = { ...loop, end: this.currentTime }
+		} else {
+			this.abLoop = null
+		}
+	}
+
 	toggleRepeat = (): void => {
 		let { repeat } = this
 
@@ -502,6 +526,26 @@ export class PlayerStore {
 			id: 'failed-to-load-audio',
 			message: errorMap[reason]({ name }),
 			duration: 10_000,
+		})
+	}
+
+	#setupAbLoopEffect(): void {
+		$effect(() => {
+			const loop = this.abLoop
+			if (loop === null || loop.end === null) return
+
+			const { start } = loop
+			const end = loop.end
+			const time = this.currentTime
+			const trackId = this.activeTrack?.id
+
+			untrack(() => {
+				if (trackId !== loop.trackId) {
+					this.abLoop = null
+				} else if (time >= end) {
+					this.seek(start)
+				}
+			})
 		})
 	}
 

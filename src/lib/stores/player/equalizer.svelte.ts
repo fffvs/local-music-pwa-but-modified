@@ -57,6 +57,9 @@ export class EqualizerStore {
 				const targetGain = enabled ? (bands[i] ?? 0) : 0
 				filter.gain.setTargetAtTime(targetGain, this.#graph.context.currentTime, 0.015)
 			}
+
+			// Flat or disabled EQ is fully transparent, so skip the filter chain entirely.
+			this.#graph.setEqBypassed(!enabled || bands.every((gain) => gain === 0))
 		})
 	}
 
