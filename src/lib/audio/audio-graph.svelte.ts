@@ -31,6 +31,7 @@ export class AudioGraph {
 	#convolverNode: ConvolverNode | null = null
 	#dryGainNode: GainNode | null = null
 	#wetGainNode: GainNode | null = null
+	#analyserNode: AnalyserNode | null = null
 	#filters: BiquadFilterNode[] = []
 	#suspendTimeout: number | null = null
 	#reverbReleaseTimeout: number | null = null
@@ -46,6 +47,11 @@ export class AudioGraph {
 	stereoPan = $state(0.0)
 	bitPerfectEnabled = $state(true)
 	reverbPreset = $state<'off' | 'studio' | 'room' | 'hall' | 'cathedral'>('off')
+
+	/** Passive analyser on the final output. Null until the graph is created. */
+	get analyserNode(): AnalyserNode | null {
+		return this.#analyserNode
+	}
 
 	get context(): AudioContext {
 		return this.#ensureGraph()
@@ -177,9 +183,16 @@ export class AudioGraph {
 		fadeNode.connect(volumeNode)
 		volumeNode.connect(ctx.destination)
 
+		// Passive tap on the final output for visualizers and metering. It is not
+		// connected to the destination, so it never changes the audio path.
+		const analyserNode = ctx.createAnalyser()
+		analyserNode.fftSize = 2048
+		volumeNode.connect(analyserNode)
+
 		this.#context = ctx
 		this.#inputNode = inputNode
 		this.#volumeNode = volumeNode
+		this.#analyserNode = analyserNode
 		this.#fadeNode = fadeNode
 		this.#compressorNode = compressorNode
 		this.#pannerNode = pannerNode
@@ -407,6 +420,10 @@ export class AudioGraph {
 		if (this.#volumeNode) {
 			try { this.#volumeNode.disconnect() } catch {}
 		}
+		if (this.#analyserNode) {
+			try { this.#analyserNode.disconnect() } catch {}
+		}
+		this.#analyserNode = null
 
 		if (this.#context) {
 			this.#context.close()
