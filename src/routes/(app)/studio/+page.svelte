@@ -4,6 +4,7 @@
 	import Button from '$lib/components/Button.svelte'
 	import PlainLayout from '$lib/components/PlainLayout.svelte'
 	import Tabs from '$lib/components/Tabs.svelte'
+	import Visualizer from '$lib/components/visualizer/Visualizer.svelte'
 	import { getListeningStats, type ListeningStats } from '$lib/library/listening-stats.ts'
 	import SettingsListItem from '../settings/components/SettingsListItem.svelte'
 	import SettingsSelectListItem from '../settings/components/SettingsSelectListItem.svelte'
@@ -74,7 +75,11 @@
 {/snippet}
 
 <PlainLayout title="Studio">
-	<div class="settings-max-width mx-auto mt-2 mb-4 w-full">
+	<div class="mt-2">
+		<Visualizer />
+	</div>
+
+	<div class="settings-max-width mx-auto mt-4 mb-4 w-full">
 		<Tabs
 			items={tabs}
 			{selectedIndex}

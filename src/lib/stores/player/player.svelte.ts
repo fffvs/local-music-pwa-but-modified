@@ -46,6 +46,9 @@ export const PLAYER_PLAYBACK_RATE_MIN = 0.5
 export const PLAYER_PLAYBACK_RATE_MAX = 2
 
 export class PlayerStore {
+        get analyserNode() {
+                return this.#graph.initialized ? this.#graph.analyserNode : null
+        }
         get audioContext() {
                 return this.#graph.initialized ? this.#graph.context : null
         }
