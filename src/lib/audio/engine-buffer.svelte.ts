@@ -6,53 +6,84 @@ import {
 	Input,
 	type InputAudioTrack,
 	InputDisposedError,
+	MP3,
+	MP4,
+	OGG,
 	PCM_AUDIO_CODECS,
+	WAVE,
+	WEBM,
 } from 'mediabunny'
 import { browser } from '$app/env'
 import { isAbortError } from '$lib/helpers/utils/errors.ts'
 import { isSafari } from '$lib/helpers/utils/ua.ts'
 import { wait } from '$lib/helpers/utils/wait.ts'
 import type { AudioGraph } from './audio-graph.svelte.ts'
+import { type DecodedChunk, openDecodeWorker } from './decode-client.ts'
+import { playbackMetrics } from './playback-metrics.svelte.ts'
 import {
 	type AudioEngineImpl,
 	type AudioEngineOptions,
 	CURRENT_TIME_UPDATE_TIMEOUT_MS,
 } from './engine.ts'
 
-const FORMATS = [FLAC]
+const FORMATS = [FLAC, MP3, MP4, OGG, WAVE, WEBM]
 const LOOK_AHEAD_TIME_SECONDS = 2.0
+// A buffer that starts this much after its scheduled time counts as a late buffer.
+const LATE_BUFFER_THRESHOLD_SECONDS = 0.01
 // Ultra-fast start: only require 0.2s of decoded buffer to begin playback
 const BUFFER_RESUME_SECONDS = 0.2
 const SEEK_END_THRESHOLD_SECONDS = 0.5
 
-const isAudioCodecSupported = browser && 'AudioDecoder' in globalThis
+type GaplessCodec = 'flac' | 'mp3' | 'aac' | 'opus' | 'vorbis'
+
+/** Maps the codec names stored by the metadata parser to WebCodecs-decodable codecs. */
+const CODEC_PATTERNS: ReadonlyArray<readonly [RegExp, GaplessCodec]> = [
+	[/^flac$/, 'flac'],
+	[/^mpeg \d layer 3$/, 'mp3'],
+	[/^aac$/, 'aac'],
+	[/^opus$/, 'opus'],
+	[/^vorbis$/, 'vorbis'],
+]
+
+export const toGaplessCodec = (codec: string): GaplessCodec | null => {
+	const normalized = codec.trim().toLowerCase()
+	return CODEC_PATTERNS.find(([pattern]) => pattern.test(normalized))?.[1] ?? null
+}
+
+const hasWebCodecsAudio = (): boolean => browser && 'AudioDecoder' in globalThis
 
 export const supportsBufferEngine = (codec: string): boolean | Promise<boolean> => {
-	const normalizedCodec = codec.toLowerCase()
-	if (!isAudioCodecSupported) {
+	if (!hasWebCodecsAudio()) {
 		return false
 	}
 
+	const normalizedCodec = codec.toLowerCase()
 	if (PCM_AUDIO_CODECS.includes(normalizedCodec as 'pcm-s16')) {
 		return canDecodeAudio(normalizedCodec as 'pcm-s16')
-	}
-
-	if (normalizedCodec !== 'flac') {
-		return false
 	}
 
 	if (isSafari()) {
 		return false
 	}
 
-	return canDecodeAudio(normalizedCodec as 'flac')
+	const gaplessCodec = toGaplessCodec(codec)
+	if (gaplessCodec === null) {
+		return false
+	}
+
+	return canDecodeAudio(gaplessCodec)
 }
 
 interface AudioBufferEngineOptions {
 	audioGraph: AudioGraph
 	duration: number
-	input: Input
-	audioTrack: InputAudioTrack
+	/** Main-thread demuxer. Unused when `openStream` supplies decoded chunks. */
+	input: Input | null
+	audioTrack: InputAudioTrack | null
+	/** Supplies decoded chunks from elsewhere (the decode worker). */
+	openStream?: (startTime: number, ctx: AudioContext) => AsyncIterable<DecodedChunk>
+	/** Releases whatever backs `openStream`, e.g. terminates the worker. */
+	closeSource?: () => void
 	signal: AbortSignal
 	scheduleAt?: number
 	preservePitch: boolean
@@ -69,6 +100,8 @@ export class AudioBufferEngine implements AudioEngineImpl {
 
 	#input: Input | null
 	#audioTrack: InputAudioTrack | null
+	readonly #openStream: AudioBufferEngineOptions['openStream']
+	#closeSource: (() => void) | null
 
 	#scheduledSources = new Set<AudioBufferSourceNode>()
 	#scheduleBase = 0
@@ -108,6 +141,8 @@ export class AudioBufferEngine implements AudioEngineImpl {
 		this.#externalSignal = options.signal
 		this.#input = options.input
 		this.#audioTrack = options.audioTrack
+		this.#openStream = options.openStream
+		this.#closeSource = options.closeSource ?? null
 		this.#playbackRate = options.playbackRate
 
 		this.#gainNode = audioGraph.context.createGain()
@@ -165,6 +200,10 @@ export class AudioBufferEngine implements AudioEngineImpl {
 			this.#input = null
 		}
 		this.#audioTrack = null
+		if (this.#closeSource) {
+			this.#closeSource()
+			this.#closeSource = null
+		}
 		try {
 			this.#gainNode.disconnect()
 		} catch {}
@@ -174,8 +213,8 @@ export class AudioBufferEngine implements AudioEngineImpl {
 		const signal = this.#signal
 		this.#ended = false
 
-		if (!this.#audioTrack) return
-		const sink = new AudioBufferSink(this.#audioTrack)
+		const stream = this.#openBufferStream(seekTo)
+		if (!stream) return
 
 		const ctx = this.#graph.context
 		const base = scheduleAt ?? Math.max(ctx.currentTime, this.#lastScheduledEndTime)
@@ -183,22 +222,36 @@ export class AudioBufferEngine implements AudioEngineImpl {
 		this.#seekOffset = seekTo
 		this.#lastScheduledEndTime = base
 
+		if (scheduleAt !== undefined) {
+			playbackMetrics.recordGaplessHandoff()
+		}
+
 		if (scheduleAt === undefined) {
 			this.buffering = true
 		} else if (this.#wantsToPlay) {
 			this.#startCurrentTimeLoop(signal)
 		}
 
-		void this.#scheduleSink(sink, seekTo, base, signal)
+		void this.#scheduleSink(stream, seekTo, base, signal)
+	}
+
+	#openBufferStream(seekTo: number): AsyncIterable<DecodedChunk> | null {
+		if (this.#openStream) {
+			return this.#openStream(seekTo, this.#graph.context)
+		}
+
+		if (!this.#audioTrack) return null
+		return new AudioBufferSink(this.#audioTrack).buffers(seekTo)
 	}
 
 	async #scheduleSink(
-		sink: AudioBufferSink,
+		stream: AsyncIterable<DecodedChunk>,
 		seekTo: number,
 		base: number,
 		signal: AbortSignal,
 	): Promise<void> {
 		let allBuffersPulled = false
+		let isFirstBuffer = true
 		const trackDuration = this.duration
 
 		const handleEnded = () => {
@@ -218,7 +271,7 @@ export class AudioBufferEngine implements AudioEngineImpl {
 		}
 
 		try {
-			for await (const { buffer, timestamp } of sink.buffers(seekTo)) {
+			for await (const { buffer, timestamp } of stream) {
 				if (signal.aborted) {
 					break
 				}
@@ -242,6 +295,14 @@ export class AudioBufferEngine implements AudioEngineImpl {
 				if (signal.aborted) {
 					break
 				}
+
+				// The first buffer of a pass can legitimately start a little early or late
+				// (seek alignment), so only later buffers count towards the metric.
+				const lateBy = ctx.currentTime - startAt
+				if (!isFirstBuffer && lateBy > LATE_BUFFER_THRESHOLD_SECONDS) {
+					playbackMetrics.recordLateBuffer(lateBy)
+				}
+				isFirstBuffer = false
 
 				const source = ctx.createBufferSource()
 				source.buffer = buffer
@@ -334,6 +395,32 @@ export class AudioBufferEngine implements AudioEngineImpl {
 
 export const createAudioBufferEngine = async (options: AudioEngineOptions) => {
 	const { signal } = options
+
+	// Preferred path: demux and decode in a worker so the main thread only
+	// schedules ready-made AudioBuffers.
+	const worker = await openDecodeWorker(options.blob)
+	if (worker) {
+		if (signal.aborted) {
+			worker.terminate()
+			signal.throwIfAborted()
+		}
+
+		playbackMetrics.recordDecoder('worker')
+		return new AudioBufferEngine({
+			audioGraph: options.audioGraph,
+			duration: options.duration,
+			input: null,
+			audioTrack: null,
+			openStream: worker.openStream,
+			closeSource: worker.terminate,
+			signal,
+			scheduleAt: options.scheduleAt,
+			preservePitch: options.preservePitch,
+			playbackRate: options.playbackRate,
+		})
+	}
+
+	// Fallback: demux and decode on the main thread.
 	const input = new Input({ formats: FORMATS, source: new BlobSource(options.blob) })
 
 	const audioTrack = await input.getPrimaryAudioTrack()
@@ -344,6 +431,7 @@ export const createAudioBufferEngine = async (options: AudioEngineOptions) => {
 
 	signal.throwIfAborted()
 
+	playbackMetrics.recordDecoder('main')
 	return new AudioBufferEngine({
 		audioGraph: options.audioGraph,
 		duration: options.duration,

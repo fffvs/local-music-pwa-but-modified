@@ -7,6 +7,8 @@
 	import ShuffleButton from './buttons/ShuffleButton.svelte'
 
 	const { class: className }: { class?: ClassValue } = $props()
+
+	const player = usePlayer()
 </script>
 
 <div class={['flex items-center gap-2', className]}>
@@ -20,5 +22,7 @@
 
 	<RepeatButton />
 
-	<AbLoopButton />
+	{#if player.abLoopButtonVisible}
+		<AbLoopButton />
+	{/if}
 </div>

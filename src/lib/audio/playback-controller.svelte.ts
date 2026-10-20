@@ -8,6 +8,8 @@ import {
 	supportsBufferEngine,
 } from './engine-buffer.svelte.ts'
 import { createHTMLAudioEngine, type HTMLAudioEngine } from './engine-html.svelte.ts'
+import { playbackMetrics } from './playback-metrics.svelte.ts'
+import { readTrackFormat, type TrackFormat } from './track-format.ts'
 
 type AudioEngine = AudioBufferEngine | HTMLAudioEngine
 
@@ -20,7 +22,7 @@ type TrackLoadReason = 'load' | 'preload'
 export type TrackLoader = (trackId: number, reason: TrackLoadReason) => Promise<TrackLoaderResult>
 
 type EngineLoadResult =
-	| { status: 'loaded'; engine: AudioEngine }
+	| { status: 'loaded'; engine: AudioEngine; format: TrackFormat }
 	| { status: 'aborted' }
 	| { status: 'failed'; reason: FileLoadFailReason }
 
@@ -37,6 +39,7 @@ interface EngineStateReady {
 	trackId: number
 	engine: AudioEngine
 	controller: AbortController
+	format: TrackFormat
 }
 interface EngineStateFailed {
 	status: 'failed'
@@ -59,11 +62,12 @@ const createStateTransition = (trackId: number) => {
 
 	return {
 		loading: (): EngineStateLoading => ({ status: 'loading', trackId, controller }),
-		ready: (engine: AudioEngine): EngineStateReady => ({
+		ready: (engine: AudioEngine, format: TrackFormat): EngineStateReady => ({
 			status: 'ready',
 			trackId,
 			engine,
 			controller,
+			format,
 		}),
 		failed: (reason: EngineStateFailed['reason']): EngineStateFailed => failed(trackId, reason),
 	}
@@ -101,6 +105,8 @@ export class PlaybackController {
 
 	playing = $state(false)
 	duration = $state(0)
+	/** Format of the currently loaded track, or null while loading. */
+	format = $state<TrackFormat | null>(null)
 
 	readonly loading = $derived.by(() => {
 		const current = this.#current
@@ -152,6 +158,7 @@ export class PlaybackController {
 
 		const transition = createStateTransition(trackId)
 		this.#current = transition.loading()
+		this.format = null
 
 		const result = await this.#tryLoadingEngine(trackId, {
 			reason: 'load',
@@ -169,7 +176,7 @@ export class PlaybackController {
 			return
 		}
 
-		this.#promoteToCurrent(transition.ready(result.engine))
+		this.#promoteToCurrent(transition.ready(result.engine, result.format))
 	}
 
 	async preloadNext(trackId: number): Promise<void> {
@@ -214,7 +221,7 @@ export class PlaybackController {
 			return
 		}
 
-		this.#next = transition.ready(result.engine)
+		this.#next = transition.ready(result.engine, result.format)
 	}
 
 	abortNext(): void {
@@ -239,6 +246,7 @@ export class PlaybackController {
 	abort(): void {
 		this.playing = false
 		this.duration = 0
+		this.format = null
 
 		this.#teardownCurrent()
 		this.#current = idle()
@@ -292,7 +300,10 @@ export class PlaybackController {
 
 			signal.throwIfAborted()
 
-			return { status: 'loaded', engine }
+			playbackMetrics.recordEngine(canUseBufferEngine ? 'buffer' : 'html')
+
+			const format = await readTrackFormat(result.file, result.codec)
+			return { status: 'loaded', engine, format }
 		} catch (error) {
 			if (isAbortError(error)) {
 				return { status: 'aborted' }
@@ -318,6 +329,7 @@ export class PlaybackController {
 		engine.onError = () => this.#options.onError('error')
 		this.#current = readyState
 		this.duration = engine.duration
+		this.format = readyState.format
 
 		if (this.playing) {
 			void engine.play()

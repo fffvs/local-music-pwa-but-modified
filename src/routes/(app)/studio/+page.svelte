@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte'
+	import { playbackMetrics } from '$lib/audio/playback-metrics.svelte.ts'
 	import Button from '$lib/components/Button.svelte'
 	import PlainLayout from '$lib/components/PlainLayout.svelte'
 	import Tabs from '$lib/components/Tabs.svelte'
@@ -55,6 +56,9 @@
 
 	const abLoopDescription = $derived.by(() => {
 		const loop = player.abLoop
+		if (!player.abLoopButtonVisible) {
+			return 'Turn on the A-B button above to loop a section'
+		}
 		if (loop === null) {
 			return 'Use the A-B button in the player to loop a section'
 		}
@@ -146,6 +150,13 @@
 				bottomDivider
 			/>
 
+			<SettingsSwitchListItem
+				title="Show A-B Loop Button"
+				description="Adds the A-B button to the player controls"
+				bind:checked={player.abLoopButtonVisible}
+				bottomDivider
+			/>
+
 			<SettingsListItem title="A-B loop" description={abLoopDescription} columnInCompactLayout>
 				{#if player.abLoop !== null}
 					<Button
@@ -156,6 +167,51 @@
 						>Clear loop</Button
 					>
 				{/if}
+			</SettingsListItem>
+
+			<SettingsListItem
+				title="Playback engine"
+				description="Buffer engine is gapless and decodes in chunks. HTML is the fallback"
+				columnInCompactLayout
+				bottomDivider
+			>
+				<span class="text-title-md">
+					{playbackMetrics.lastEngine === null
+						? 'Not started'
+						: playbackMetrics.lastEngine === 'buffer'
+							? 'Buffer (gapless)'
+							: 'HTML (fallback)'}
+				</span>
+			</SettingsListItem>
+
+			<SettingsListItem
+				title="Decoder"
+				description="Web Worker keeps decoding off the main thread. Main thread is the fallback"
+				columnInCompactLayout
+				bottomDivider
+			>
+				<span class="text-title-md">
+					{playbackMetrics.decoder === null
+						? 'Not started'
+						: playbackMetrics.decoder === 'worker'
+							? 'Web Worker'
+							: 'Main thread'}
+				</span>
+			</SettingsListItem>
+
+			<SettingsListItem
+				title="Late audio buffers"
+				description={`Worst lateness: ${playbackMetrics.worstLatenessMs.toFixed(1)} ms. Gapless handoffs: ${playbackMetrics.gaplessHandoffs}`}
+				columnInCompactLayout
+			>
+				<span class="text-title-md">{playbackMetrics.lateBuffers.toLocaleString()}</span>
+				<Button
+					kind="outlined"
+					onclick={() => {
+						playbackMetrics.reset()
+					}}
+					>Reset</Button
+				>
 			</SettingsListItem>
 		</section>
 	{/if}

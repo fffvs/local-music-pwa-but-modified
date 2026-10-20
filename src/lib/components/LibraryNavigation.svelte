@@ -10,7 +10,7 @@
         import type { LayoutMode } from './ListDetailsLayout.svelte'
 
         type Props = {
-                activeSlug: LibraryStoreName
+                activeSlug: LibraryStoreName | 'studio'
         } & (
                 | { variant: 'bottom' }
                 | {
@@ -37,6 +37,8 @@
                 { slug: 'artists', title: m.artists(), icon: 'person' },
                 { slug: 'playlists', title: m.playlists(), icon: 'playlist' },
         ])
+
+        const studioItem = { title: 'Studio', icon: 'equalizer' } satisfies Omit<NavItem, 'slug'>
 </script>
 
 {#snippet items(className: string)}
@@ -58,6 +60,22 @@
                         </div>
                 </Button>
         {/each}
+        <Button
+                as="a"
+                href="/studio"
+                kind="blank"
+                tooltip={studioItem.title}
+                class={['flex shrink-0 items-center justify-center', className]}
+        >
+                <div
+                        class={[
+                                'flex items-center justify-center rounded-full p-2',
+                                props.activeSlug === 'studio' && 'bg-secondaryContainer text-onSecondaryContainer',
+                        ]}
+                >
+                        <Icon type={studioItem.icon} />
+                </div>
+        </Button>
 {/snippet}
 
 {#if props.variant === 'bottom'}

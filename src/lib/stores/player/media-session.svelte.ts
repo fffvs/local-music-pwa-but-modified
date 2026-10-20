@@ -1,5 +1,6 @@
 import { formatArtists, formatNameOrUnknown } from '$lib/helpers/utils/text'
 import type { TrackData } from '$lib/library/get/value'
+import { SessionKeepAlive } from './session-keepalive.ts'
 
 interface PlayerImpl {
 	activeTrack: TrackData | undefined
@@ -17,6 +18,7 @@ interface PlayerImpl {
 
 export class MediaSessionController {
 	#player: PlayerImpl
+	#keepAlive = new SessionKeepAlive()
 
 	constructor(player: PlayerImpl) {
 		this.#player = player
@@ -40,6 +42,7 @@ export class MediaSessionController {
 
 			player.seek(Math.min(player.currentTime + offset, player.duration))
 		})
+		setAction('stop', () => player.pause())
 		setAction('seekto', ({ seekTime }) => {
 			if (seekTime != null) {
 				player.seek(seekTime)
@@ -48,6 +51,7 @@ export class MediaSessionController {
 
 		$effect(() => {
 			ms.playbackState = player.playing ? 'playing' : 'paused'
+			this.#keepAlive.setPlaying(player.playing)
 		})
 
 		$effect(() => {

@@ -237,8 +237,19 @@ describe('PlayerStore', () => {
 	describe('cycleAbLoop', () => {
 		beforeEach(() => {
 			seedTrack(1)
+			player.abLoopButtonVisible = true
 			player.playFrom(0, [1, 2, 3])
 			flushSync()
+		})
+
+		it('clears an active loop when the A-B button is hidden', () => {
+			ctrl.currentTime = 10
+			player.cycleAbLoop()
+			expect(player.abLoop).not.toBeNull()
+
+			player.abLoopButtonVisible = false
+			flushSync()
+			expect(player.abLoop).toBeNull()
 		})
 
 		it('cycles unset → A → B → cleared', () => {
