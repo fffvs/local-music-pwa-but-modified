@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte'
+	import { playbackMetrics } from '$lib/audio/playback-metrics.svelte.ts'
 	import Button from '$lib/components/Button.svelte'
 	import PlainLayout from '$lib/components/PlainLayout.svelte'
 	import Tabs from '$lib/components/Tabs.svelte'
@@ -166,6 +167,36 @@
 						>Clear loop</Button
 					>
 				{/if}
+			</SettingsListItem>
+
+			<SettingsListItem
+				title="Playback engine"
+				description="Buffer engine is gapless and decodes in chunks. HTML is the fallback"
+				columnInCompactLayout
+				bottomDivider
+			>
+				<span class="text-title-md">
+					{playbackMetrics.lastEngine === null
+						? 'Not started'
+						: playbackMetrics.lastEngine === 'buffer'
+							? 'Buffer (gapless)'
+							: 'HTML (fallback)'}
+				</span>
+			</SettingsListItem>
+
+			<SettingsListItem
+				title="Late audio buffers"
+				description={`Worst lateness: ${playbackMetrics.worstLatenessMs.toFixed(1)} ms. Gapless handoffs: ${playbackMetrics.gaplessHandoffs}`}
+				columnInCompactLayout
+			>
+				<span class="text-title-md">{playbackMetrics.lateBuffers.toLocaleString()}</span>
+				<Button
+					kind="outlined"
+					onclick={() => {
+						playbackMetrics.reset()
+					}}
+					>Reset</Button
+				>
 			</SettingsListItem>
 		</section>
 	{/if}

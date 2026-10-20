@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { wait } from '$lib/helpers/utils/wait.ts'
 import type { AudioGraph } from '../audio-graph.svelte.ts'
-import { AudioBufferEngine, supportsBufferEngine } from '../engine-buffer.svelte.ts'
+import { isSafari } from '$lib/helpers/utils/ua.ts'
+import { AudioBufferEngine, supportsBufferEngine, toGaplessCodec } from '../engine-buffer.svelte.ts'
+import { playbackMetrics } from '../playback-metrics.svelte.ts'
+
+vi.mock('$app/env', () => ({ browser: true }))
 
 /**
  * The sink behavior is configurable per test. Default: hang (never yields) so
@@ -47,6 +51,11 @@ vi.mock('mediabunny', () => ({
 	Input: MockInput,
 	canDecodeAudio: mockCanDecodeAudio,
 	FLAC: 'flac',
+	MP3: 'mp3',
+	MP4: 'mp4',
+	OGG: 'ogg',
+	WAVE: 'wav',
+	WEBM: 'webm',
 	PCM_AUDIO_CODECS: ['pcm-s16'],
 	InputDisposedError: class InputDisposedError extends Error {
 		constructor() {
@@ -134,6 +143,79 @@ describe('supportsBufferEngine', () => {
 		expect(supportsBufferEngine('mp3')).toBe(false)
 		expect(supportsBufferEngine('aac')).toBe(false)
 		expect(supportsBufferEngine('opus')).toBe(false)
+	})
+})
+
+describe('codec mapping', () => {
+	it.each([
+		['FLAC', 'flac'],
+		['MPEG 1 Layer 3', 'mp3'],
+		['MPEG 2 Layer 3', 'mp3'],
+		['AAC', 'aac'],
+		['Opus', 'opus'],
+		['Vorbis', 'vorbis'],
+	])('maps metadata codec %s to %s', (input, expected) => {
+		expect(toGaplessCodec(input)).toBe(expected)
+	})
+
+	it.each(['ALAC', 'MPEG 1 Layer 2', 'PCM', ''])('does not map %s', (input) => {
+		expect(toGaplessCodec(input)).toBeNull()
+	})
+})
+
+describe('supportsBufferEngine with WebCodecs available', () => {
+	beforeEach(() => {
+		vi.stubGlobal('AudioDecoder', class {})
+		mockCanDecodeAudio.mockResolvedValue(true)
+		vi.mocked(isSafari).mockReturnValue(false)
+	})
+
+	afterEach(() => {
+		vi.unstubAllGlobals()
+		vi.clearAllMocks()
+	})
+
+	it('checks decodability of the mapped codec for gapless formats', async () => {
+		expect(await supportsBufferEngine('MPEG 1 Layer 3')).toBe(true)
+		expect(mockCanDecodeAudio).toHaveBeenLastCalledWith('mp3')
+		expect(await supportsBufferEngine('AAC')).toBe(true)
+		expect(mockCanDecodeAudio).toHaveBeenLastCalledWith('aac')
+		expect(await supportsBufferEngine('FLAC')).toBe(true)
+		expect(mockCanDecodeAudio).toHaveBeenLastCalledWith('flac')
+	})
+
+	it('reports false when the browser cannot decode the codec', async () => {
+		mockCanDecodeAudio.mockResolvedValueOnce(false)
+		expect(await supportsBufferEngine('Opus')).toBe(false)
+	})
+
+	it('returns false for codecs without a gapless mapping', () => {
+		expect(supportsBufferEngine('ALAC')).toBe(false)
+	})
+
+	it('keeps Safari on the HTML engine', () => {
+		vi.mocked(isSafari).mockReturnValue(true)
+		expect(supportsBufferEngine('MPEG 1 Layer 3')).toBe(false)
+		expect(mockCanDecodeAudio).not.toHaveBeenCalled()
+	})
+})
+
+describe('playbackMetrics', () => {
+	it('counts late buffers and tracks the worst lateness', () => {
+		playbackMetrics.reset()
+		playbackMetrics.recordLateBuffer(0.02)
+		playbackMetrics.recordLateBuffer(0.05)
+		playbackMetrics.recordLateBuffer(0.01)
+		expect(playbackMetrics.lateBuffers).toBe(3)
+		expect(playbackMetrics.worstLatenessMs).toBeCloseTo(50)
+	})
+
+	it('resets counters without clearing the engine type', () => {
+		playbackMetrics.recordEngine('buffer')
+		playbackMetrics.recordGaplessHandoff()
+		playbackMetrics.reset()
+		expect(playbackMetrics.gaplessHandoffs).toBe(0)
+		expect(playbackMetrics.lastEngine).toBe('buffer')
 	})
 })
 

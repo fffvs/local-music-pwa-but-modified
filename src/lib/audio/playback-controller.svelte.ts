@@ -8,6 +8,7 @@ import {
 	supportsBufferEngine,
 } from './engine-buffer.svelte.ts'
 import { createHTMLAudioEngine, type HTMLAudioEngine } from './engine-html.svelte.ts'
+import { playbackMetrics } from './playback-metrics.svelte.ts'
 
 type AudioEngine = AudioBufferEngine | HTMLAudioEngine
 
@@ -291,6 +292,8 @@ export class PlaybackController {
 			}
 
 			signal.throwIfAborted()
+
+			playbackMetrics.recordEngine(canUseBufferEngine ? 'buffer' : 'html')
 
 			return { status: 'loaded', engine }
 		} catch (error) {
