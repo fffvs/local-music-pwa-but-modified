@@ -1,4 +1,5 @@
 <script lang="ts">
+	import AbLoopButton from './buttons/AbLoopButton.svelte'
 	import PlayNextButton from './buttons/PlayNextButton.svelte'
 	import PlayPrevButton from './buttons/PlayPrevButton.svelte'
 	import PlayTogglePillButton from './buttons/PlayTogglePillButton.svelte'
@@ -18,4 +19,6 @@
 	<PlayNextButton />
 
 	<RepeatButton />
+
+	<AbLoopButton />
 </div>

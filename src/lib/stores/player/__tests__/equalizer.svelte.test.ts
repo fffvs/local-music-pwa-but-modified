@@ -11,6 +11,7 @@ const makeGraph = () => ({
 	initialized: false,
 	filters: Array.from({ length: 10 }, () => ({ gain: { value: 0 } })),
 	context: { currentTime: 0 },
+	setEqBypassed: vi.fn(),
 })
 
 // Graph with an initialized AudioContext — the filter effect runs and calls setTargetAtTime.
@@ -20,6 +21,7 @@ const makeInitializedGraph = () => ({
 		gain: { value: 0, setTargetAtTime: vi.fn() },
 	})),
 	context: { currentTime: 0 },
+	setEqBypassed: vi.fn(),
 })
 
 let store!: EqualizerStore
@@ -121,6 +123,50 @@ describe('EqualizerStore', () => {
 			}
 
 			innerCleanup()
+		})
+	})
+
+	describe('filter bypass', () => {
+		it('bypasses the EQ chain while all bands are flat', () => {
+			const graph = makeInitializedGraph()
+			const dispose = $effect.root(() => {
+				new EqualizerStore(graph as never)
+			})
+			flushSync()
+			expect(graph.setEqBypassed).toHaveBeenLastCalledWith(true)
+			dispose()
+		})
+
+		it('enables the EQ chain when a band is non-zero', () => {
+			const graph = makeInitializedGraph()
+			let eq!: EqualizerStore
+			const dispose = $effect.root(() => {
+				eq = new EqualizerStore(graph as never)
+			})
+			flushSync()
+			eq.enabled = true
+			eq.setBand(2, 3)
+			flushSync()
+			expect(graph.setEqBypassed).toHaveBeenLastCalledWith(false)
+			dispose()
+		})
+
+		it('bypasses the EQ chain when the equalizer is disabled', () => {
+			const graph = makeInitializedGraph()
+			let eq!: EqualizerStore
+			const dispose = $effect.root(() => {
+				eq = new EqualizerStore(graph as never)
+			})
+			flushSync()
+			expect(graph.setEqBypassed).toHaveBeenLastCalledWith(true)
+			eq.applyPreset('rock')
+			eq.enabled = true
+			flushSync()
+			expect(graph.setEqBypassed).toHaveBeenLastCalledWith(false)
+			eq.enabled = false
+			flushSync()
+			expect(graph.setEqBypassed).toHaveBeenLastCalledWith(true)
+			dispose()
 		})
 	})
 })
