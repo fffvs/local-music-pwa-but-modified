@@ -27,12 +27,6 @@
 	const generalMenuItems = () => {
 		const menuItems = [
 			{
-				label: 'Studio',
-				action: () => {
-					goto('/studio')
-				},
-			},
-			{
 				label: m.settings(),
 				action: () => {
 					goto('/settings')

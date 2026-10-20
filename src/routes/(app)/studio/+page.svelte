@@ -55,6 +55,9 @@
 
 	const abLoopDescription = $derived.by(() => {
 		const loop = player.abLoop
+		if (!player.abLoopButtonVisible) {
+			return 'Turn on the A-B button above to loop a section'
+		}
 		if (loop === null) {
 			return 'Use the A-B button in the player to loop a section'
 		}
@@ -143,6 +146,13 @@
 					? 'Shaping the sound with your band settings'
 					: 'Off or flat. The filters are bypassed to save CPU'}
 				bind:checked={player.equalizer.enabled}
+				bottomDivider
+			/>
+
+			<SettingsSwitchListItem
+				title="Show A-B Loop Button"
+				description="Adds the A-B button to the player controls"
+				bind:checked={player.abLoopButtonVisible}
 				bottomDivider
 			/>
 

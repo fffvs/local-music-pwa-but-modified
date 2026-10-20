@@ -199,7 +199,9 @@
 
 							<RepeatButton />
 
-							<AbLoopButton />
+							{#if player.abLoopButtonVisible}
+								<AbLoopButton />
+							{/if}
 						</div>
 					</div>
 				{/if}

@@ -259,6 +259,7 @@ export class PlayerStore {
 			'preservePitch',
 			'gaplessPlaybackEnabled',
 			'pauseAfterTrackWhenRepeatIsOff',
+			'abLoopButtonVisible',
 		])
 		persist('player', this.#queue, ['shuffle'])
 
@@ -484,6 +485,9 @@ export class PlayerStore {
 	 */
 	abLoop: { trackId: number; start: number; end: number | null } | null = $state(null)
 
+	/** Whether the A-B button is shown in the player controls. Off by default. */
+	abLoopButtonVisible = $state(false)
+
 	cycleAbLoop = (): void => {
 		const trackId = this.activeTrack?.id
 		if (trackId === undefined) return
@@ -532,7 +536,17 @@ export class PlayerStore {
 	#setupAbLoopEffect(): void {
 		$effect(() => {
 			const loop = this.abLoop
-			if (loop === null || loop.end === null) return
+			if (loop === null) return
+
+			// Hiding the button also drops the loop, so it can't keep running uncancellable.
+			if (!this.abLoopButtonVisible) {
+				untrack(() => {
+					this.abLoop = null
+				})
+				return
+			}
+
+			if (loop.end === null) return
 
 			const { start } = loop
 			const end = loop.end
