@@ -431,3 +431,37 @@ describe('AudioBufferEngine', () => {
 		})
 	})
 })
+
+describe('AudioBufferEngine with an external chunk stream', () => {
+	it('schedules chunks from openStream and releases the source on dispose', async () => {
+		const controller = new AbortController()
+		const graph = makeBufferGraph()
+		const closeSource = vi.fn()
+		const openStream = vi.fn(async function* () {
+			yield { buffer: { duration: 0.5 } as AudioBuffer, timestamp: 0 }
+		})
+
+		const engine = new AudioBufferEngine({
+			audioGraph: graph as unknown as AudioGraph,
+			duration: 10,
+			input: null,
+			audioTrack: null,
+			openStream,
+			closeSource,
+			signal: controller.signal,
+			playbackRate: 1,
+			preservePitch: true,
+		})
+
+		await wait(10)
+		expect(openStream).toHaveBeenCalledWith(0, graph.context)
+
+		const source = graph.context.createBufferSource.mock.results[0]?.value
+		expect(source.start).toHaveBeenCalled()
+
+		controller.abort()
+		expect(closeSource).toHaveBeenCalledTimes(1)
+		expect(engine).toBeDefined()
+	})
+})
+

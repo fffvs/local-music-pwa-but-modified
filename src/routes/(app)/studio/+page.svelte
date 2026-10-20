@@ -185,6 +185,21 @@
 			</SettingsListItem>
 
 			<SettingsListItem
+				title="Decoder"
+				description="Web Worker keeps decoding off the main thread. Main thread is the fallback"
+				columnInCompactLayout
+				bottomDivider
+			>
+				<span class="text-title-md">
+					{playbackMetrics.decoder === null
+						? 'Not started'
+						: playbackMetrics.decoder === 'worker'
+							? 'Web Worker'
+							: 'Main thread'}
+				</span>
+			</SettingsListItem>
+
+			<SettingsListItem
 				title="Late audio buffers"
 				description={`Worst lateness: ${playbackMetrics.worstLatenessMs.toFixed(1)} ms. Gapless handoffs: ${playbackMetrics.gaplessHandoffs}`}
 				columnInCompactLayout

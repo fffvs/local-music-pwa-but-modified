@@ -1,4 +1,5 @@
 export type PlaybackEngineKind = 'buffer' | 'html'
+export type PlaybackDecoderKind = 'worker' | 'main'
 
 /**
  * Lightweight counters for diagnosing playback smoothness. Shown on the Studio
@@ -9,6 +10,7 @@ class PlaybackMetrics {
 	worstLatenessMs = $state(0)
 	gaplessHandoffs = $state(0)
 	lastEngine = $state<PlaybackEngineKind | null>(null)
+	decoder = $state<PlaybackDecoderKind | null>(null)
 
 	recordLateBuffer(latenessSeconds: number): void {
 		this.lateBuffers += 1
@@ -21,6 +23,10 @@ class PlaybackMetrics {
 
 	recordEngine(kind: PlaybackEngineKind): void {
 		this.lastEngine = kind
+	}
+
+	recordDecoder(kind: PlaybackDecoderKind): void {
+		this.decoder = kind
 	}
 
 	reset(): void {
