@@ -7,18 +7,95 @@ folder of HTML, JS, CSS, fonts and icons. There is no server, no database and no
 API to run — your music library lives in your own browser (IndexedDB / File System
 Access API), not on the host.
 
-That means **any free static host works**, and you do not need Codespaces, a VPS,
-or even a computer with Node installed: the host connects to your GitHub repo and
-builds it for you. Each host gives you a free HTTPS URL on a domain that is
-*not* `github.io`.
+Technically **any static host works**, and you do not need Codespaces, a VPS, or
+even a computer with Node installed: the host connects to your GitHub repo and
+builds it for you. The hard part is finding a domain your school allows — see
+the next section if every host is blocked.
 
-> **Do this first:** open a few of these domains from the school network/device
-> *before* setting anything up — `https://example.netlify.app`,
-> `https://example.pages.dev`, `https://example.vercel.app`,
-> `https://example.onrender.com`. School filters often block whole categories
-> ("developer tools", "personal sites", "unclassified / newly registered
-> domains"), so a host that works at home may be blocked at school. A short mail
-> to your school's IT asking them to allowlist your one domain usually works.
+## If every hosting domain is blocked at school
+
+School filters usually work by **category or allowlist**, not by individual site
+— "web hosting", "developer tools", "uncategorized" and "newly registered
+domains" are common blocked categories, which is why *Netlify, Pages, Vercel,
+Render, Firebase, Surge and Tiiny can all fail at once*
+([how filters categorize](https://www.cipawebfiltering.com/guides/how-do-schools-block-websites.php),
+[why shared platforms slip through](https://nointernetgame.com/blog/how-school-web-filters-work)).
+Trying a 20th free host is unlikely to help. Three routes remain.
+
+### 1. Get one specific domain allowed (best if other people need the link)
+
+- Look at the block page for an **"Ask for permission" / "Request access"**
+  button. Filters such as Securly, GoGuardian and Lightspeed send that request to
+  a teacher or IT admin, who can approve just your site
+  ([teacher approval](https://support.securly.com/hc/en-us/articles/4409675842967-Filter-How-can-teachers-allow-blocked-sites-for-students),
+  [student request flow](https://support.securly.com/hc/en-us/articles/115011786608-Filter-How-does-temporarily-allow-sites-work)).
+- Otherwise email the help desk with the **exact hostname**, what it is ("my own
+  browser-based music player, no accounts, no uploads, no external content"),
+  and why you need it. A single-domain allowlist exception is a one-line change
+  for them; unblocking a whole category is not.
+- A **custom domain** attached to Netlify / Cloudflare Pages / Vercel gives you
+  one clean, ordinary-looking hostname that isn't on a shared wildcard domain.
+  Caveat: some filters block domains registered in the last ~30 days as
+  "newly registered" ([Microsoft Defender categories](https://learn.microsoft.com/en-us/defender-endpoint/web-content-filtering),
+  [New Domains category](https://controld.com/blog/how-do-schools-block-websites/)).
+  Ask IT to allowlist it explicitly, or use a domain that is not brand new.
+
+If the filter is **allowlist-only**, this is the only route that gets you a
+public URL. Everything else needs one domain approved.
+
+### 2. Use a domain the school already trusts
+
+Big shared cloud/CDN hostnames are hard for schools to block wholesale because
+coursework and real software live on them. Test two or three of these from the
+school network before investing any setup time:
+
+| Host | Free URL | Notes |
+| --- | --- | --- |
+| GitLab Pages | `*.gitlab.io` | free repo + CI, no card; similar to GitHub Pages |
+| Codeberg Pages | `*.codeberg.page` | free, small, rarely categorized |
+| Azure Static Web Apps | `*.azurestaticapps.net` | free tier, Azure account needed |
+| AWS CloudFront + S3 | `*.cloudfront.net` | huge shared CDN; AWS account + card needed |
+| Google Cloud Storage | `storage.googleapis.com` | public bucket, billing account needed |
+| CDN in front of your repo | `cdn.jsdelivr.net`, `raw.githubusercontent.com` | only if `github.com` works at school; needs a subpath-aware build (ask me) |
+| Your school's own domain | student web space, LMS, Google Sites | already allowlisted — ask your teacher if one exists |
+
+Settings for any of them: build command `pnpm run build`, output `build`,
+Node 24+, pnpm 11, and a fallback of `200.html` for unknown paths. On a CDN
+serving from a subpath, the absolute asset URLs (`/_app/...`) need a
+`paths.relative` build — that's a small code change, say the word.
+
+### 3. Skip the internet entirely — run it locally (always works)
+
+This is the reliable fallback when nothing is allowed. `127.0.0.1` is a
+**secure context**, so the file picker, IndexedDB, service worker and PWA
+install all work, and no network request leaves the device for the filter to
+see.
+
+1. Get the built folder: download the `snae-player-static` artifact from the
+   **Actions** tab (do it at home if `github.com` is blocked too) and unzip it
+   onto a USB stick, or run `pnpm run build` on your own computer and copy
+   `build/`. Keep `scripts/` next to it.
+2. Start the tiny local server (no dependencies, no install):
+
+   | Device | Command |
+   | --- | --- |
+   | Windows | double-click `scripts/serve.bat`, or `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\serve.ps1` |
+   | macOS / Linux / Chromebook Linux (Crostini) / Android Termux | `python3 scripts/serve.py` |
+   | Windows without PowerShell scripting allowed | portable Python from a USB stick, then `python.exe scripts\serve.py` |
+
+3. Open **`http://127.0.0.1:8080/`** (use `8080` every time — the origin is
+   part of your library's identity).
+4. If Chrome offers an **Install** button, take it. The service worker caches
+   the whole app on first load, so you can then open the installed app
+   **without the server running at all** — fully offline. (Some managed devices
+   disable PWA installation; in that case just keep the server running while you
+   use it.)
+
+Notes: opening `index.html` directly with `file://` will **not** work (ES
+modules and IndexedDB are blocked on file origins) — you need the small server.
+A managed school device may block running scripts or installing PWAs; in that
+case use your own laptop or an Android phone with Termux. This only serves that
+one device, so it's for personal use, not for sharing a link with the class.
 
 ## Build settings (same on every host)
 
@@ -137,9 +214,14 @@ pnpm run dev              # http://localhost:5173
 `localhost` counts as a secure context, so the file picker, service worker and
 PWA install all work, and the school filter never sees it. `pnpm run build &&
 pnpm run preview` does the same with the production build. The catch: it only
-works on that machine and only while the server is running. On a school-managed
-Chromebook you usually cannot install Node — use one of the hosted options
-instead, or enable Linux (Crostini) if your school allows it.
+works on that machine and only while the server is running, and a school-managed
+Chromebook usually cannot install Node.
+
+If you can't install Node either, use **`scripts/serve.py` / `scripts/serve.bat`**
+from the [local/offline section](#3-skip-the-internet-entirely--run-it-locally-always-works)
+instead — they need only Python or built-in Windows PowerShell, and can run
+straight from a USB stick with the prebuilt `build/` folder. Install the PWA
+once and it keeps working with the server turned off.
 
 ---
 
@@ -161,11 +243,13 @@ For any of them: build command `pnpm run build`, output `build`, Node 24+,
 pnpm 11, and make sure unknown paths fall back to `200.html` (or a `404.html`
 copy of it) rather than a generic 404 page.
 
-**A custom domain is the most reliable fix.** A domain costs a few dollars a
-year (some registrars have cheap `.xyz`/`.top`/`.me` names, and students often
-get one free through GitHub Student Developer Pack). Add it under the host's
-**Custom domains** settings — free HTTPS certificates are automatic — then use
-that one URL everywhere. Filters are much less likely to block a single
+**A custom domain is the most reliable fix** (see the
+[allowlist section](#1-get-one-specific-domain-allowed-best-if-other-people-need-the-link)
+if every free host is blocked). A domain costs a few dollars a year (some
+registrars have cheap `.xyz`/`.top`/`.me` names, and students often get one free
+through GitHub Student Developer Pack). Add it under the host's **Custom
+domains** settings — free HTTPS certificates are automatic — then use that one
+URL everywhere. Filters are much less likely to block a single
 ordinary-looking domain than a shared wildcard developer domain.
 
 If the block is *only* on the `github.io` hostname, another option is to keep

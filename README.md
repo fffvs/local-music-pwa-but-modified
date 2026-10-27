@@ -30,7 +30,10 @@ SvelteKit/Svelte 5 · TypeScript · Tailwind CSS 4
 
 This is a fully static app — no server or database required. See [DEPLOY.md](DEPLOY.md)
 for free hosting options (Netlify, Cloudflare Pages, Vercel, GitHub Actions build
-artifacts) that work without GitHub Pages or Codespaces.
+artifacts) that work without GitHub Pages or Codespaces, plus what to do when
+every hosting domain is blocked at school. To run the built site entirely
+offline, use `scripts/serve.py` (Python) or `scripts/serve.bat` (Windows) and
+open `http://127.0.0.1:8080/`.
 
 ## Running locally
 

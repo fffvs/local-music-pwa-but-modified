@@ -9,3 +9,5 @@ vite.config.ts.timestamp-*
 coverage
 .claude
 .pnpm-store
+__pycache__
+*.pyc
