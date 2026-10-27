@@ -74,6 +74,13 @@ export interface UnknownTrack extends ParsedTrackData {
 	scannedAt: number
 	fileName: string
 	directory: number
+	/** Path relative to the chosen directory, when known. */
+	relativePath?: string
+	/** File attributes recorded at the last successful metadata scan. */
+	fileSize?: number
+	fileLastModified?: number
+	/** Retry artwork on rescan after a companion image could not be read. */
+	artworkPending?: boolean
 	metadataVersion?: number
 }
 

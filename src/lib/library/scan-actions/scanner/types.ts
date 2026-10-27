@@ -1,17 +1,19 @@
-import type { FileEntity } from '$lib/helpers/file-system'
-
 export interface TracksScanResult {
-	/** Count of many tracks were newly added */
+	/** Tracks whose metadata was newly added or updated. */
 	newlyImported: number
-	/** Index of currently scanned track */
+	/** Audio files checked so far. */
 	current: number
-	/** Total count of tracks */
-	total: number
+	/** Files or companion artwork that could not be read. */
+	failed: number
+	cancelled: boolean
 }
 
-export interface TracksScanMessage {
-	finished: boolean
-	count: TracksScanResult
+export type ScanPauseReason = 'manual' | 'playback' | null
+
+/** @public */
+export interface TracksScanProgress extends TracksScanResult {
+	pauseReason: ScanPauseReason
+	stopping: boolean
 }
 
 /** @public */
@@ -21,8 +23,38 @@ export type TracksScanOptions =
 			dirId: number
 			dirHandle: FileSystemDirectoryHandle
 	  }
-	// Used in the browsers which do not support `showDirectoryPicker`
+	// Used in browsers which do not support showDirectoryPicker.
 	| {
 			action: 'legacy-files-add'
-			files: FileEntity[]
+			files: FileList | readonly File[]
 	  }
+
+export type TracksScanWorkerOptions =
+	| Exclude<TracksScanOptions, { action: 'legacy-files-add' }>
+	| { action: 'legacy-files-add' }
+
+export interface LegacyScanFile {
+	file: File
+	relativePath: string
+	companionArtwork?: File
+}
+
+export interface LegacyFilesChunk {
+	files: LegacyScanFile[]
+	done: boolean
+}
+
+export type TracksScanRequest =
+	| { type: 'start'; options: TracksScanWorkerOptions; playbackActive: boolean }
+	| { type: 'legacy-chunk'; chunk: LegacyFilesChunk }
+	| { type: 'legacy-error'; name: string; message: string }
+	| { type: 'playback'; active: boolean }
+	| { type: 'pause' }
+	| { type: 'resume' }
+	| { type: 'cancel' }
+
+export type TracksScanMessage =
+	| { type: 'progress'; progress: TracksScanProgress }
+	| { type: 'request-legacy-chunk' }
+	| { type: 'done'; result: TracksScanResult }
+	| { type: 'error'; name: string; message: string }

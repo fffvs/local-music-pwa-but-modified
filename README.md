@@ -10,7 +10,17 @@ Play audio files stored on your device. Includes playlists, queue, favorites, eq
 
 ## Browser support
 
-Works in all modern browsers. When the [File System Access API](https://developer.mozilla.org/en-US/docs/Web/API/File_System_Access_API) is available, currently Chromium-based browsers, the app reads files directly from your chosen folder. In other browsers, files are copied into IndexedDB, which doubles the storage used.
+The build targets Chromium 130 and Safari 18 or newer. When the [File System Access API](https://developer.mozilla.org/en-US/docs/Web/API/File_System_Access_API) is available, currently Chromium-based browsers, the app reads files directly from your chosen folder. In other browsers, files are copied into IndexedDB, which doubles the storage used.
+
+## Large libraries and removable drives
+
+- Use a Chromium-based browser with direct folder access for a large USB library. The fallback picker must first materialize the browser's full file list, then copies music into browser storage and can run out of space; file transfers to the scanner are bounded.
+- Scanning is incremental and pauses during playback. Settings provides pause, resume (including while listening), and cancel controls. A pending file read may need to finish before a pause or cancellation takes effect.
+- Rescans keep missing or unreadable tracks so a disconnected drive does not erase playlists or listening history. Remove unwanted tracks manually only when you are sure: removal also removes their playlist and history entries, but not the original music files.
+- Incremental scans compare file size and modification time. An edit that preserves both attributes may not be detected. Browser storage can still be cleared or evicted, so keep a separate backup of the browser profile/library data.
+- Close older app tabs if a database upgrade is blocked, and reconnect the drive or renew folder permissions if scanning or playback cannot read it.
+
+Production builds leave the optional console performance and clipping diagnostics off to reduce background work. To enable them for troubleshooting, run `localStorage.setItem('snae-debug-diagnostics', '1')` in the browser console and reload. Studio's playback metrics remain available without this option.
 
 ## Privacy
 

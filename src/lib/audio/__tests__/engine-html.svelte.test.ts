@@ -25,6 +25,12 @@ class MockAudio extends EventTarget {
 	pause = vi.fn(() => {
 		this.paused = true
 	})
+	removeAttribute = vi.fn((name: string) => {
+		if (name === 'src') {
+			this.src = ''
+		}
+	})
+	load = vi.fn()
 }
 
 let mockAudio!: MockAudio

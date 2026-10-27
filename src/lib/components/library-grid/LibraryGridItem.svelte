@@ -54,7 +54,7 @@
 	const artworkSrc = createManagedArtwork(() => {
 		if (type === 'albums' && item) {
 			const album = item as AlbumData
-			return getAlbumManagedArtworkSource(album)
+			return getAlbumManagedArtworkSource(album, 'small')
 		}
 
 		return undefined

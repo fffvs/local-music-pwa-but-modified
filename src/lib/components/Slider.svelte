@@ -8,6 +8,7 @@
 		value: number
 		disabled?: boolean
 		vertical?: boolean
+		format?: (value: number) => string
 		onSeekStart?: () => void
 		onSeekEnd?: () => void
 	}
@@ -19,6 +20,7 @@
 		value = $bindable(0),
 		disabled,
 		vertical = false,
+		format,
 		onSeekStart,
 		onSeekEnd,
 	}: Props = $props()
@@ -123,6 +125,7 @@
 		{min}
 		{max}
 		{step}
+		aria-valuetext={format?.(value)}
 		class={[
 			'grow appearance-none opacity-0 disabled:cursor-auto',
 			vertical ? 'vertical-input h-full w-11' : 'horizontal-input h-11 w-full',

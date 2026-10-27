@@ -36,6 +36,7 @@
 
 	const isAndroidPlatform = isAndroid()
 	let reparentDirectory = $state<ReparentDirectory | null>(null)
+	let directoryToRemove = $state<DirectoryWithCount | null>(null)
 
 	const addNewDirectoryHandler = async () => {
 		const directory = await showDirectoryPicker({
@@ -87,13 +88,13 @@
 	}
 
 	const importLegacyFilesHandler = async () => {
-		const files = await getFilesFromLegacyDirectory().catch((e): File[] => {
+		const files = await getFilesFromLegacyDirectory().catch((e): null => {
 			snackbar.unexpectedError(e)
 
-			return []
+			return null
 		})
 
-		if (files.length === 0) {
+		if (!files || files.length === 0) {
 			return
 		}
 
@@ -159,7 +160,7 @@
 					icon="trashOutline"
 					tooltip={m.settingsDirRemove()}
 					onclick={() => {
-						void removeDirectory(dir.id)
+						directoryToRemove = dir
 					}}
 				/>
 			</div>
@@ -216,5 +217,31 @@
 				{@render directoryName(data.newDirHandle.name)}
 			{/snippet}
 		</WrapTranslation>
+	{/snippet}
+</CommonDialog>
+
+<CommonDialog
+	open={{
+		get: () => directoryToRemove,
+		close: () => {
+			directoryToRemove = null
+		},
+	}}
+	icon="trashOutline"
+	title={m.settingsDirRemove()}
+	buttons={(data) => [
+		{ title: m.cancel() },
+		{
+			title: m.libraryRemove(),
+			action: () => {
+				void removeDirectory(data.id)
+			},
+		},
+	]}
+>
+	{#snippet children({ data })}
+		{m.settingsDirRemoveConfirm({
+			directory: data.legacy ? m.settingsTracksInsideAppMemory() : data.handle.name,
+		})}
 	{/snippet}
 </CommonDialog>

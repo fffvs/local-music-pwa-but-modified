@@ -121,46 +121,54 @@ const dbReplaceDirectories = async (
 			}),
 		)
 
-	const promises = dirIds.map(async (existingDirId): Promise<DatabaseChangeDetails[]> => {
-		// Update all tracks to point to the new directory.
-		const updatedTracksPromise = tx
-			.objectStore('tracks')
-			.index('directory')
-			.openCursor(existingDirId)
-			.then(async (c) => {
-				let cursor = c
+	// Paths from every old root, including the retained directory id, are stale.
+	const promises = [directoryId, ...dirIds].map(
+		async (existingDirId): Promise<DatabaseChangeDetails[]> => {
+			// Update all tracks to point to the new directory.
+			const updatedTracksPromise = tx
+				.objectStore('tracks')
+				.index('directory')
+				.openCursor(existingDirId)
+				.then(async (c) => {
+					let cursor = c
 
-				const trackChangeRecords: DatabaseChangeDetails[] = []
-				while (cursor) {
-					const track = cursor.value
-					track.directory = directoryId
-					await cursor.update(track)
-					cursor = await cursor.continue()
+					const trackChangeRecords: DatabaseChangeDetails[] = []
+					while (cursor) {
+						const track = cursor.value
+						track.directory = directoryId
+						// The old path was relative to a different root; the rescan rebuilds it.
+						track.relativePath = undefined
+						await cursor.update(track)
+						cursor = await cursor.continue()
 
-					trackChangeRecords.push({
-						key: track.id,
-						storeName: 'tracks',
-						operation: 'update',
-					})
-				}
+						trackChangeRecords.push({
+							key: track.id,
+							storeName: 'tracks',
+							operation: 'update',
+						})
+					}
 
-				return trackChangeRecords
-			})
+					return trackChangeRecords
+				})
 
-		const removedDirectoryPromise = tx
-			.objectStore('directories')
-			.delete(existingDirId)
-			.then(
-				(): DatabaseChangeDetails => ({
-					key: existingDirId,
-					storeName: 'directories',
-					operation: 'delete',
-				}),
-			)
+			const removedDirectoryPromise =
+				existingDirId === directoryId
+					? Promise.resolve<DatabaseChangeDetails[]>([])
+					: tx
+							.objectStore('directories')
+							.delete(existingDirId)
+							.then((): DatabaseChangeDetails[] => [
+								{
+									key: existingDirId,
+									storeName: 'directories',
+									operation: 'delete',
+								},
+							])
 
-		const result = await Promise.all([removedDirectoryPromise, updatedTracksPromise])
-		return result.flat()
-	})
+			const result = await Promise.all([removedDirectoryPromise, updatedTracksPromise])
+			return result.flat()
+		},
+	)
 
 	const [_, ...changes] = await Promise.all([tx.done, replaceHandlePromise, ...promises])
 
@@ -200,7 +208,7 @@ export const removeDirectory = createUIAction({
 })
 
 export const importLegacyFiles = createUIAction({
-	action: async (files: File[]) => {
+	action: async (files: FileList) => {
 		await scanTracks({
 			action: 'legacy-files-add',
 			files,
