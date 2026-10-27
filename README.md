@@ -26,6 +26,12 @@ Translations are machine-generated and won't always sound natural. Fixes and sug
 
 SvelteKit/Svelte 5 · TypeScript · Tailwind CSS 4
 
+## Hosting
+
+This is a fully static app — no server or database required. See [DEPLOY.md](DEPLOY.md)
+for free hosting options (Netlify, Cloudflare Pages, Vercel, GitHub Actions build
+artifacts) that work without GitHub Pages or Codespaces.
+
 ## Running locally
 
 Clone the repo, then copy `.env.example` to `.env`:

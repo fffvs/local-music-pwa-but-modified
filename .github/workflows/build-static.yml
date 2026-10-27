@@ -1,0 +1,38 @@
+name: Build static site
+
+# Produces a downloadable `build/` folder in the cloud, so you can drag and drop
+# it onto a static host without Codespaces or a local Node/pnpm install.
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run build
+
+      # index.html is the prerendered landing page and 200.html is the SPA
+      # shell. Static hosts use 404.html as their not-found page, so give them
+      # a copy of the shell for deep links into the app.
+      - name: Add a host-friendly not-found page
+        run: cp build/200.html build/404.html
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: snae-player-static
+          path: build
+          if-no-files-found: error

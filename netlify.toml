@@ -4,6 +4,7 @@ command = "pnpm run build"
 
 [build.environment]
 NODE_VERSION = "26.3.0"
+# PUBLIC_FALLBACK_PAGE is supplied by the committed .env.production file.
 
 # V1 version of the app used different service worker file name
 [[redirects]]

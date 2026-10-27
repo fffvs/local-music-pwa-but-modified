@@ -1,0 +1,10 @@
+{
+	"$schema": "https://openapi.vercel.sh/vercel.json",
+	"framework": null,
+	"buildCommand": "pnpm run build",
+	"outputDirectory": "build",
+	"rewrites": [
+		{ "source": "/sw.js", "destination": "/service-worker.js" },
+		{ "source": "/(.*)", "destination": "/200.html" }
+	]
+}
