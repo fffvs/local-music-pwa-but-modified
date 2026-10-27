@@ -48,6 +48,7 @@ const resolveRegular = async (
 const resolveAndroidWorkaround = async (
 	directoryId: number,
 	fileName: string,
+	relativePath: string | undefined,
 	askPermission: boolean,
 ): Promise<File | null> => {
 	const db = await getDatabase()
@@ -61,13 +62,20 @@ const resolveAndroidWorkaround = async (
 		return null
 	}
 
-	const fileHandle = await dir.handle.getFileHandle(fileName)
+	const parts = relativePath?.split('/').filter(Boolean) ?? [fileName]
+	const name = parts.pop() ?? fileName
+	let parent = dir.handle
+	for (const part of parts) {
+		parent = await parent.getDirectoryHandle(part)
+	}
+	const fileHandle = await parent.getFileHandle(name)
 	return fileHandle.getFile()
 }
 
 interface ResolveTrackFileOptions {
 	directoryId: number
 	entity: FileEntity
+	relativePath?: string
 	askPermission: boolean
 }
 
@@ -79,14 +87,19 @@ interface ResolveTrackFileOptions {
 export const resolveTrackFile = async (
 	options: ResolveTrackFileOptions,
 ): Promise<ResolveResult> => {
-	const { directoryId, entity, askPermission } = options
+	const { directoryId, entity, relativePath, askPermission } = options
 	try {
 		let file: File | null = null
 
 		if (entity instanceof File) {
 			file = entity
 		} else if (isAndroid() && isChromiumBased()) {
-			file = await resolveAndroidWorkaround(directoryId, entity.name, askPermission)
+			file = await resolveAndroidWorkaround(
+				directoryId,
+				entity.name,
+				relativePath,
+				askPermission,
+			)
 		} else {
 			file = await resolveRegular(entity, askPermission)
 		}

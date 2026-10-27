@@ -48,7 +48,7 @@
                                 displayedSrc = src
                                 error = false
                         })
-                        .catch((err) => {
+                        .catch(() => {
                                 // Fallback on browser error/abort
                                 displayedSrc = src
                                 error = false

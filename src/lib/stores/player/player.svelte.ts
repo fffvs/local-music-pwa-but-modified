@@ -317,6 +317,7 @@ export class PlayerStore {
 			const result = await resolveTrackFile({
 				directoryId: track.directory,
 				entity: track.file,
+				relativePath: track.relativePath,
 				// Preload should stay silent
 				askPermission: reason === 'load',
 			})

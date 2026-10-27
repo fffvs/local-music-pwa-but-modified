@@ -30,6 +30,7 @@ export interface AppDB extends DBSchema {
 			| 'imageHash'
 		> & {
 			path: [directoryId: number, fileName: string]
+			byRelativePath: [directoryId: number, relativePath: string]
 			byAlbumSorted: [album: string, discNo: number, trackNo: number, name: string]
 		}
 		meta: {
@@ -123,7 +124,7 @@ const createStore = <DBTypes extends DBSchema | unknown, Name extends StoreNames
 	})
 
 const openAppDatabase = () =>
-	openDB<AppDB>('snae-app-data', 4, {
+	openDB<AppDB>('snae-app-data', 5, {
 		async upgrade(db, oldVersion, _newVersion, tx) {
 			const { objectStoreNames } = db
 
@@ -161,6 +162,13 @@ const openAppDatabase = () =>
 						unique: false,
 					},
 				)
+			}
+
+			// Existing records are populated lazily on their next successful scan.
+			if (!tracksStore.indexNames.contains('byRelativePath')) {
+				tracksStore.createIndex('byRelativePath', ['directory', 'relativePath'], {
+					unique: false,
+				})
 			}
 
 			// v4: content-addressed artwork dedup.

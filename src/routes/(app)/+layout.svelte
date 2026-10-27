@@ -13,6 +13,7 @@
 	import Seo from '$lib/components/Seo.svelte'
 	import SnackbarRenderer from '$lib/components/snackbar/SnackbarRenderer.svelte'
 	import { isElementTextInput } from '$lib/helpers/input.ts'
+	import { setScanPlaybackActive } from '$lib/library/scan-actions/scanner/start.ts'
 	import { DialogsStore } from '$lib/stores/dialogs/store.svelte.ts'
 	import { setDialogsStoreContext } from '$lib/stores/dialogs/use-store.ts'
 	import { PlayerStore } from '$lib/stores/player/player.svelte.ts'
@@ -29,6 +30,12 @@
 	// to allow better trees shaking and inlining
 	const player = setPlayerStoreContext(new PlayerStore())
 	const dialogs = setDialogsStoreContext(new DialogsStore())
+
+	$effect(() => {
+		if (browser) {
+			setScanPlaybackActive(player.playing)
+		}
+	})
 
 	$effect(() => () => {
 		// Cleanup
@@ -58,7 +65,7 @@
 
                                 if (time > 10) {
                                         import('$lib/library/get/value.ts').then(({ getLibraryValue }) => {
-                                                getLibraryValue('tracks', trackId).then(track => {
+                                                Promise.resolve(getLibraryValue('tracks', trackId)).then(track => {
                                                         if (track) {
                                                                 import('$lib/components/snackbar/snackbar.ts').then(({ snackbar }) => {
                                                                         snackbar({
@@ -149,9 +156,9 @@
                 }
         });
 
-        // 3. Snae Player Strict Code Guard (Luau --!strict equivalent)
+        // 3. Optional development diagnostics; the Studio metrics remain available in production.
         $effect(() => {
-                if (!browser) return;
+                if (!browser || (!import.meta.env.DEV && localStorage.getItem('snae-debug-diagnostics') !== '1')) return;
 
                 console.log('%c🛡️ Snae Strict Mode Active: Monitoring runtime execution...', 'color: #4af2a1; font-weight: bold; font-family: monospace;');
 
@@ -210,7 +217,7 @@
                                                 if (!player.playing) return;
                                                 analyser.getFloatTimeDomainData(buffer);
                                                 for (let i = 0; i < buffer.length; i++) {
-                                                        if (Math.abs(buffer[i]) >= 0.99) {
+                                                        if (Math.abs(buffer[i] ?? 0) >= 0.99) {
                                                                 console.warn('%c[Strict: Audio] Output is clipping! Pre-amp or EQ gain is too high, causing hardware distortion.', 'color: #ffaa00; font-style: italic;');
                                                                 break;
                                                         }

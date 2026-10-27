@@ -1,8 +1,12 @@
 import 'fake-indexeddb/auto'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getDatabase } from '$lib/db/database.ts'
+import { onDatabaseChange } from '$lib/db/events.ts'
 import { clearDatabaseStores, dbGetAllAndExpectLength } from '$lib/helpers/test-helpers.ts'
-import { dbImportTrack } from '$lib/library/scan-actions/scanner/steps/import-track.ts'
+import {
+	dbImportTrack,
+	dbImportTracksBatch,
+} from '$lib/library/scan-actions/scanner/steps/import-track.ts'
 import type { ImageRecord, UnknownTrack } from '$lib/library/types.ts'
 
 const makeImageRecord = (hash: string): ImageRecord => ({
@@ -111,5 +115,80 @@ describe('dbImportTrack artwork dedup', () => {
 		expect(track?.imageHash).toBe('cover')
 		expect(track?.primaryColor).toBe(0xff_11_22_33)
 		expect(track?.image).toBeUndefined()
+	})
+})
+
+describe('dbImportTracksBatch', () => {
+	beforeEach(async () => {
+		await clearDatabaseStores()
+	})
+
+	afterEach(() => vi.restoreAllMocks())
+
+	it('commits multiple tracks atomically and notifies only after the batch', async () => {
+		const db = await getDatabase()
+		const transactions = vi.spyOn(db, 'transaction')
+		const events = vi.fn()
+		const stopListening = onDatabaseChange(events)
+		const image = makeImageRecord('shared-cover')
+		const ids = await dbImportTracksBatch([
+			{ metadata: buildTrack({ name: 'One', imageHash: image.hash }), imageRecord: image },
+			{ metadata: buildTrack({ name: 'Two', imageHash: image.hash }), imageRecord: image },
+		])
+		stopListening()
+
+		expect(ids).toHaveLength(2)
+		expect(transactions).toHaveBeenCalledTimes(1)
+		expect(events).toHaveBeenCalledTimes(1)
+		expect(
+			events.mock.calls[0]?.[0].filter(
+				(change: { storeName: string }) => change.storeName === 'tracks',
+			),
+		).toHaveLength(2)
+		expect(await db.count('tracks')).toBe(2)
+		expect(await db.count('albums')).toBe(1)
+		expect(await db.count('artists')).toBe(1)
+		expect(await db.count('images')).toBe(1)
+	})
+
+	it('rolls back all records and sends no changes when the transaction fails', async () => {
+		const db = await getDatabase()
+		const events = vi.fn()
+		const stopListening = onDatabaseChange(events)
+		const image = makeImageRecord('aborted-cover')
+		await expect(
+			dbImportTracksBatch([
+				{
+					metadata: buildTrack({ uuid: 'duplicate', imageHash: image.hash }),
+					imageRecord: image,
+				},
+				{ metadata: buildTrack({ uuid: 'duplicate' }) },
+			]),
+		).rejects.toBeDefined()
+		stopListening()
+
+		expect(events).not.toHaveBeenCalled()
+		expect(await db.count('tracks')).toBe(0)
+		expect(await db.count('albums')).toBe(0)
+		expect(await db.count('artists')).toBe(0)
+		expect(await db.count('images')).toBe(0)
+	})
+
+	it('repairs an incomplete stored image when a good copy is imported', async () => {
+		const db = await getDatabase()
+		await db.put('images', {
+			hash: 'broken',
+			optimized: false,
+			full: null as unknown as Blob,
+			small: null as unknown as Blob,
+			primaryColor: undefined,
+		})
+		const image = makeImageRecord('broken')
+		await dbImportTracksBatch([
+			{ metadata: buildTrack({ imageHash: image.hash }), imageRecord: image },
+		])
+		const repaired = await db.get('images', image.hash)
+		expect(repaired?.full).toMatchObject({ type: 'image/jpeg' })
+		expect(repaired?.small).toMatchObject({ type: 'image/webp' })
 	})
 })

@@ -5,108 +5,135 @@ export type FileEntity = File | FileSystemFileHandle
 const supportedExtensions = ['aac', 'mp3', 'ogg', 'wav', 'flac', 'm4a', 'opus', 'webm']
 const supportedExtensionsWithDot = supportedExtensions.map((ext) => `.${ext}`)
 
-const isSupportedFile = (fileName: string): boolean => {
-        const fileNameLower = fileName.toLowerCase()
-        return supportedExtensionsWithDot.some((ext) => fileNameLower.endsWith(ext))
+export const isSupportedMusicFile = (fileName: string): boolean => {
+	const lowerName = fileName.toLowerCase()
+	return supportedExtensionsWithDot.some((extension) => lowerName.endsWith(extension))
 }
-
-// Map associating scanned audio files to their directory's companion art blob
-export const companionArtMap = new WeakMap<FileEntity, Blob>()
 
 export const COMPANION_ART_NAMES = new Set([
-        'cover.jpg', 'cover.jpeg', 'cover.png',
-        'folder.jpg', 'folder.jpeg', 'folder.png',
-        'front.jpg', 'front.jpeg', 'front.png',
-        'album.jpg', 'album.jpeg', 'album.png'
+	'cover.jpg',
+	'cover.jpeg',
+	'cover.png',
+	'folder.jpg',
+	'folder.jpeg',
+	'folder.png',
+	'front.jpg',
+	'front.jpeg',
+	'front.png',
+	'album.jpg',
+	'album.jpeg',
+	'album.png',
 ])
 
-export const getFileHandlesRecursively = async (
-        directory: FileSystemDirectoryHandle,
-): Promise<FileSystemFileHandle[]> => {
-        const files: FileSystemFileHandle[] = []
-        const subDirs: FileSystemDirectoryHandle[] = []
-        let companionArtHandle: FileSystemFileHandle | undefined
-
-        // First pass: group files and subdirectories, check for companion art
-        for await (const handle of directory.values()) {
-                if (handle.kind === 'file') {
-                        const lowerName = handle.name.toLowerCase()
-                        if (COMPANION_ART_NAMES.has(lowerName)) {
-                                companionArtHandle = handle
-                        } else if (isSupportedFile(handle.name)) {
-                                files.push(handle)
-                        }
-                } else if (handle.kind === 'directory') {
-                        subDirs.push(handle)
-                }
-        }
-
-        // If a companion art file exists, read it as a blob
-        let companionBlob: Blob | undefined
-        if (companionArtHandle) {
-                try {
-                        companionBlob = await companionArtHandle.getFile()
-                } catch (e) {
-                        console.error('[companion-art] failed to load:', companionArtHandle.name, e)
-                }
-        }
-
-        // Map companion artwork to all audio files in this directory
-        if (companionBlob) {
-                for (const file of files) {
-                        companionArtMap.set(file, companionBlob)
-                }
-        }
-
-        // Recursively read subdirectories
-        for (const subDir of subDirs) {
-                const subDirFiles = await getFileHandlesRecursively(subDir)
-                files.push(...subDirFiles)
-        }
-
-        return files
+export interface DiscoveredMusicFile {
+	file: FileSystemFileHandle
+	/** Path relative to the directory the user selected. */
+	relativePath: string
+	companionArtwork?: File
+	companionArtworkUnavailable: boolean
 }
 
-const getFilesFromLegacyInputEvent = (e: Event): File[] => {
-        const { files } = e.target as HTMLInputElement
-        if (!files) {
-                return []
-        }
-        return Array.from(files).filter((file) => isSupportedFile(file.name))
+interface WalkDirectoryOptions {
+	checkpoint?: () => Promise<void>
+	onArtworkError?: (error: unknown, path: string) => void
 }
 
-export const getFilesFromLegacyDirectory = (): Promise<File[]> => {
-        const directoryElement = document.createElement('input')
-        directoryElement.type = 'file'
+// Small album folders are traversed once. Large folders are re-enumerated rather
+// than retaining every handle so their cover can still appear after their tracks.
+const MAX_BUFFERED_DIRECTORY_ENTRIES = 128
 
-        directoryElement.setAttribute('webkitdirectory', '')
-        directoryElement.setAttribute('directory', '')
+export async function* walkMusicDirectory(
+	directory: FileSystemDirectoryHandle,
+	options: WalkDirectoryOptions = {},
+	prefix = '',
+): AsyncGenerator<DiscoveredMusicFile> {
+	const checkpoint = options.checkpoint ?? (() => Promise.resolve())
+	const buffered: FileSystemHandle[] = []
+	let overflowed = false
+	let artworkHandle: FileSystemFileHandle | undefined
 
-        const { promise, resolve: resolvePromise, reject } = Promise.withResolvers<File[]>()
+	for await (const handle of directory.values()) {
+		await checkpoint()
+		if (handle.kind === 'file' && COMPANION_ART_NAMES.has(handle.name.toLowerCase())) {
+			artworkHandle = handle as FileSystemFileHandle
+		}
 
-        const resolve = (files: File[]) => {
-                directoryElement.remove()
-                resolvePromise(files)
-        }
+		if (!overflowed) {
+			if (buffered.length < MAX_BUFFERED_DIRECTORY_ENTRIES) {
+				buffered.push(handle)
+			} else {
+				overflowed = true
+				buffered.length = 0
+			}
+		}
+	}
 
-        directoryElement.addEventListener('change', (e) => {
-                resolve(getFilesFromLegacyInputEvent(e))
-        })
+	let companionArtwork: File | undefined
+	let companionArtworkUnavailable = false
+	if (artworkHandle) {
+		await checkpoint()
+		try {
+			companionArtwork = await artworkHandle.getFile()
+		} catch (error) {
+			companionArtworkUnavailable = true
+			console.error('[companion-art] failed to load:', artworkHandle.name, error)
+			options.onArtworkError?.(error, `${prefix}${artworkHandle.name}`)
+		}
+	}
 
-        directoryElement.addEventListener('cancel', () => {
-                resolve([])
-        })
+	const entries = overflowed ? directory.values() : buffered
+	for await (const handle of entries) {
+		await checkpoint()
+		const relativePath = `${prefix}${handle.name}`
+		if (handle.kind === 'directory') {
+			yield* walkMusicDirectory(
+				handle as FileSystemDirectoryHandle,
+				options,
+				`${relativePath}/`,
+			)
+		} else if (isSupportedMusicFile(handle.name)) {
+			yield {
+				file: handle as FileSystemFileHandle,
+				relativePath,
+				companionArtwork,
+				companionArtworkUnavailable,
+			}
+		}
+	}
+}
 
-        directoryElement.addEventListener('error', (errorEvent) => {
-                reject(new Error('Input error', { cause: errorEvent }))
-        })
+export const getFilesFromLegacyDirectory = (): Promise<FileList | null> => {
+	const directoryElement = document.createElement('input')
+	directoryElement.type = 'file'
 
-        directoryElement.style.position = 'fixed'
-        directoryElement.style.top = '-100000px'
-        directoryElement.style.left = '-100000px'
-        document.body.appendChild(directoryElement)
+	directoryElement.setAttribute('webkitdirectory', '')
+	directoryElement.setAttribute('directory', '')
 
-        directoryElement.click()
+	const { promise, resolve: resolvePromise, reject } = Promise.withResolvers<FileList | null>()
 
-        return promise
+	const resolve = (files: FileList | null) => {
+		directoryElement.remove()
+		resolvePromise(files)
+	}
+
+	directoryElement.addEventListener('change', () => {
+		resolve(directoryElement.files)
+	})
+
+	directoryElement.addEventListener('cancel', () => {
+		resolve(null)
+	})
+
+	directoryElement.addEventListener('error', (errorEvent) => {
+		reject(new Error('Input error', { cause: errorEvent }))
+	})
+
+	directoryElement.style.position = 'fixed'
+	directoryElement.style.top = '-100000px'
+	directoryElement.style.left = '-100000px'
+	document.body.appendChild(directoryElement)
+
+	directoryElement.click()
+
+	return promise
 }

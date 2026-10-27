@@ -2,7 +2,6 @@
         import { isMobile } from '$lib/helpers/utils/ua.ts'
         import type { LibraryStoreName } from '$lib/library/types.ts'
         import { useMainStore } from '$lib/stores/main/use-store.ts'
-        import { useDialogsStore } from '$lib/stores/dialogs/use-store.ts'
         import Button from './Button.svelte'
         import IconButton from './IconButton.svelte'
         import type { IconType } from './icon/Icon.svelte'
@@ -28,7 +27,6 @@
 
         const props: Props = $props()
         const main = useMainStore()
-        const dialogs = useDialogsStore()
         const isHandHeldDevice = isMobile()
 
         const navItems: NavItem[] = $derived([

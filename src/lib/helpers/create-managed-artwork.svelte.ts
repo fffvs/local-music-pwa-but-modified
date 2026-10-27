@@ -75,6 +75,7 @@ type ArtworkSource =
 			type: 'blob'
 			cacheKey: string
 			blob: Blob
+			size: ArtworkSourceImageSize
 	  }
 	| {
 			type: 'imageHash'
@@ -117,7 +118,11 @@ const resizeBlobIfNeeded = async (blob: Blob, maxDimension: number): Promise<Blo
 	const targetHeight = Math.round(height * scale)
 
 	const canvas = new OffscreenCanvas(targetWidth, targetHeight)
-	const ctx = canvas.getContext('2d')!
+	const ctx = canvas.getContext('2d')
+	if (!ctx) {
+		bitmap.close()
+		throw new Error('Could not create artwork canvas context')
+	}
 	// imageSmoothingQuality 'medium' is the sweet spot: fast + good enough for album art
 	ctx.imageSmoothingQuality = 'medium'
 	ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight)
@@ -130,9 +135,11 @@ const resizeBlobIfNeeded = async (blob: Blob, maxDimension: number): Promise<Blo
 
 const fetchArtwork = async (source: ArtworkSource): Promise<Artwork | undefined> => {
 	let blob: Blob | undefined
+	let alreadyThumbnail = false
 	if (source.type === 'imageHash') {
 		const record = await dbGetImageRecord(source.imageHash)
 		blob = source.size === 'full' ? record?.full : record?.small
+		alreadyThumbnail = source.size === 'small' && Boolean(record?.optimized)
 	} else {
 		blob = source.blob
 	}
@@ -141,13 +148,10 @@ const fetchArtwork = async (source: ArtworkSource): Promise<Artwork | undefined>
 		return undefined
 	}
 
-	// Downscale before creating the Blob URL so the DOM only ever receives
-	// a small image. This eliminates scan-line rendering and GPU memory bloat.
-	const maxDim = source.type === 'imageHash'
-		? MAX_DIMENSIONS[source.size]
-		: MAX_DIMENSIONS.full
-
-	const resizedBlob = await resizeBlobIfNeeded(blob, maxDim)
+	// Stored thumbnails are already small; do not decode them a second time.
+	const resizedBlob = alreadyThumbnail
+		? blob
+		: await resizeBlobIfNeeded(blob, MAX_DIMENSIONS[source.size])
 	const artwork = new Artwork(source.cacheKey, resizedBlob)
 
 	scheduleCleanup(artwork)
@@ -224,6 +228,7 @@ export const getTrackManagedArtworkSource = (
 			type: 'blob',
 			cacheKey: `track-${track.id}-${size}`,
 			blob: size === 'full' ? track.image.full : track.image.small,
+			size,
 		}
 	}
 
@@ -231,12 +236,13 @@ export const getTrackManagedArtworkSource = (
 }
 
 /** @public */
-export const getAlbumManagedArtworkSource = (album: Album | undefined): ArtworkSource | null => {
+export const getAlbumManagedArtworkSource = (
+	album: Album | undefined,
+	size: ArtworkSourceImageSize = 'full',
+): ArtworkSource | null => {
 	if (!album) {
 		return null
 	}
-
-	const size = 'full' as const
 
 	if (album.imageHash) {
 		return {
@@ -252,6 +258,7 @@ export const getAlbumManagedArtworkSource = (album: Album | undefined): ArtworkS
 			type: 'blob',
 			cacheKey: `album-${album.id}-${size}`,
 			blob: album.image,
+			size,
 		}
 	}
 

@@ -12,6 +12,13 @@
 	import { Debounced } from '$lib/helpers/debounced.svelte.ts'
 	import { isFileSystemAccessSupported } from '$lib/helpers/file-system.ts'
 	import { debounce } from '$lib/helpers/utils/debounce.ts'
+	import { scanProgressMessage } from '$lib/library/scan-actions/scan-tracks.ts'
+	import {
+		cancelTrackScan,
+		getScanProgress,
+		pauseTrackScan,
+		resumeTrackScan,
+	} from '$lib/library/scan-actions/scanner/start.ts'
 	import type { AppMotionOption, AppThemeOption } from '$lib/stores/main/store.svelte.ts'
 	import {
 		PLAYER_PLAYBACK_RATE_MAX,
@@ -84,6 +91,7 @@
 	// This prevents UI from flickering
 	const isDatabasePendingGetter = new Debounced(() => isDatabaseOperationPending(), 200)
 	const isDatabasePending = $derived(isDatabasePendingGetter.current)
+	const scanProgress = $derived(getScanProgress())
 
 	const isGaplessPlaybackSupported = browser && 'AudioDecoder' in globalThis
 
@@ -116,16 +124,35 @@
 			<div class="flex items-center gap-2 text-title-sm">
 				{m.settingsDirectories()}
 			</div>
-			<div class="mt-1 mb-4 text-body-sm text-onSurfaceVariant">
+			<div class="mt-1 text-body-sm text-onSurfaceVariant">
 				{m.settingsAllDataLocal()}
 			</div>
+			<p class="mt-2 mb-4 text-body-sm text-onSurfaceVariant">
+				{m.settingsScanPreservesMissing()}
+			</p>
 
 			{#if !isFileSystemAccessSupported}
 				<MissingFsApiBanner />
 			{/if}
-			<DirectoriesList disabled={isDatabasePending} {directories} />
+			<DirectoriesList disabled={isDatabasePending || scanProgress !== null} {directories} />
 
-			{#if isDatabasePending}
+			{#if scanProgress}
+				<div class="mt-4 flex flex-col gap-3 rounded-md bg-tertiaryContainer/20 p-4">
+					<p role="status" aria-live="polite">{scanProgressMessage(scanProgress)}</p>
+					<div class="flex flex-wrap gap-2">
+						<Button
+							kind="toned"
+							disabled={scanProgress.stopping}
+							onclick={scanProgress.pauseReason ? resumeTrackScan : pauseTrackScan}
+						>
+							{scanProgress.pauseReason ? m.settingsScanResume() : m.settingsScanPause()}
+						</Button>
+						<Button kind="flat" disabled={scanProgress.stopping} onclick={cancelTrackScan}>
+							{m.settingsScanCancel()}
+						</Button>
+					</div>
+				</div>
+			{:else if isDatabasePending}
 				<div
 					class="mt-4 flex w-full items-center justify-center gap-4 rounded-md bg-tertiaryContainer/20 py-4"
 				>
